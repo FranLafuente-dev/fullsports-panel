@@ -557,7 +557,7 @@ const PRODUCTOS = ['Total Black','Mostaza','Media caña Mostaza','Borcegos','Car
 const TALLES = [38,39,40,41,42,43,44,45];
 const REDIRECT_URI = 'https://franlafuente-dev.github.io/fullsports-panel/';
 const MELI_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
-const MELI_TOKEN_URL = 'https://api.mercadolibre.com/oauth/token';
+const MELI_TOKEN_URL = 'https://fullsports-panel.lafuentefranciscolucas.workers.dev/api/token';
 const MELI_API = 'https://api.mercadolibre.com';
 
 // ── ESTADO ──
@@ -625,7 +625,6 @@ function showMainUI() {
 
 // ── NAVIGATION ──
 const PANEL_ORDER = ['dashboard','corte','stock','config'];
-window._currentPanel = 'dashboard';
 
 function switchPanel(name, btn, direction) {
   const prev = window._currentPanel;
