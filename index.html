@@ -567,6 +567,7 @@ window._orders     = [];
 window._stock      = {};
 window._currentCorte = null;
 window._scanStream = null;
+window._currentPanel = null;
 
 // ── TOAST ──
 function showToast(msg, ms) {
@@ -619,6 +620,7 @@ window._initApp = async function() {
 function showMainUI() {
   document.getElementById('main-header').style.display = '';
   document.getElementById('main-nav').style.display = '';
+  document.querySelectorAll('.panel').forEach(p => { p.style.display = ''; });
 }
 
 // ── NAVIGATION ──
@@ -699,7 +701,11 @@ function updateAccountDots() {
 // ── CONFIG ──
 async function loadConfig() {
   const data = await window._fbLoad('config/meli');
-  if (data) { window._config = data; document.getElementById('cfg-appid').value = data.appId || ''; }
+  if (data) {
+    window._config = data;
+    document.getElementById('cfg-appid').value = data.appId || '';
+    if (data.secretKey) document.getElementById('cfg-secret').value = data.secretKey;
+  }
 }
 async function guardarConfig() {
   const appId = document.getElementById('cfg-appid').value.trim();
