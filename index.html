@@ -539,11 +539,11 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 setTimeout(() => {
-  if (!window._fbUid && document.getElementById('splash-screen').style.display !== 'none') {
+  if (!window._fbUid) {
     hideSplash();
     document.getElementById('login-screen').style.display = 'flex';
   }
-}, 6000);
+}, 4000);
 </script>
 
 <!-- ═══ APP JS ═══ -->
@@ -1342,4 +1342,18 @@ history.pushState(null,'',location.href);
 window.addEventListener('popstate', () => history.pushState(null,'',location.href));
 window.addEventListener('pageshow', e => {
   if (e.persisted) { history.pushState(null,'',location.href); location.reload(); }
-}
+});
+
+// ── SPLASH FALLBACK (por si Firebase tarda o falla) ──
+setTimeout(function() {
+  var splash = document.getElementById('splash-screen');
+  if (!splash || splash.style.display === 'none') return;
+  splash.classList.add('hidden');
+  setTimeout(function() { splash.style.display = 'none'; }, 350);
+  if (!window._fbUid) {
+    document.getElementById('login-screen').style.display = 'flex';
+  }
+}, 5000);
+</script>
+</body>
+</html>
