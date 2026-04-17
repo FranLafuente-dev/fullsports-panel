@@ -769,7 +769,7 @@ async function handleOAuthCallback(params) {
     if (!resp.ok) { let e = {}; try { e = await resp.json(); } catch {} throw new Error(`Error ${resp.status}: ${e.message || e.error || resp.statusText}`); }
     const tokens = await resp.json();
     // Get seller info
-    const me = await fetch(`${MELI_TOKEN_URL.replace('/api/token', '/api/me')}`, { headers: { Authorization: 'Bearer ' + tokens.access_token } }).then(r => r.json());
+    const me = tokens._user || { id: tokens.user_id, nickname: 'Cuenta ' + state };
     // Save account
     const accountData = {
       accessToken: tokens.access_token,

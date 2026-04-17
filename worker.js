@@ -9,7 +9,7 @@ export default {
     };
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { status: 200, headers: corsHeaders });
     }
 
     if (request.method === 'POST' && url.pathname === '/api/token') {
@@ -22,20 +22,17 @@ export default {
         },
         body,
       });
-      const data = await resp.text();
-      return new Response(data, {
-        status: resp.status,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-      });
-    }
+      const tokens = await resp.json();
 
-    if (request.method === 'GET' && url.pathname === '/api/me') {
-      const auth = request.headers.get('Authorization') || '';
-      const resp = await fetch('https://api.mercadolibre.com/users/me', {
-        headers: { Authorization: auth, Accept: 'application/json' },
-      });
-      const data = await resp.text();
-      return new Response(data, {
+      if (resp.ok && tokens.access_token) {
+        const meResp = await fetch('https://api.mercadolibre.com/users/me', {
+          headers: { Authorization: 'Bearer ' + tokens.access_token, Accept: 'application/json' },
+        });
+        const me = await meResp.json();
+        tokens._user = { id: me.id, nickname: me.nickname };
+      }
+
+      return new Response(JSON.stringify(tokens), {
         status: resp.status,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
