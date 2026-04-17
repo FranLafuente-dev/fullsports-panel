@@ -13,17 +13,18 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 :root{
-  --bg:#0a0f1e;--bg2:#0d1428;--card:rgba(255,255,255,0.06);--card-solid:#0d1830;
+  --bg:#000000;--bg2:#0a0a0a;--card:rgba(255,255,255,0.05);--card-solid:#111111;
   --text:#fff;--text2:rgba(255,255,255,0.55);--text3:rgba(255,255,255,0.22);
   --border:rgba(255,255,255,0.1);--sep:rgba(255,255,255,0.06);
   --blue:#4D9FFF;--green:#32D74B;--red:#FF453A;--orange:#FF9F0A;
   --purple:#BF5AF2;--teal:#5AC8FA;--gold:#FFD60A;
+  --yellow:#FFE600;--yellow-dim:rgba(255,230,0,0.15);--yellow-border:rgba(255,230,0,0.35);
   --flex:#FF9F0A;--pe:#32D74B;
   --r:14px;--rl:20px;
   --safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px);
 }
 html{background:var(--bg);}
-body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;max-width:480px;margin:0 auto;position:relative;padding-bottom:calc(80px + var(--safe-bottom));-webkit-font-smoothing:antialiased;}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;max-width:480px;margin:0 auto;position:relative;padding-bottom:calc(80px + var(--safe-bottom));-webkit-font-smoothing:antialiased;overflow-x:hidden;}
 
 /* ── LOGIN ── */
 #login-screen{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 32px;}
@@ -32,8 +33,12 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .login-field{width:100%;margin-bottom:12px;}
 .login-field input{width:100%;padding:14px 16px;border:0.5px solid var(--border);border-radius:14px;background:rgba(255,255,255,0.07);color:var(--text);font-size:16px;font-family:inherit;outline:none;}
 .login-field input:focus{border-color:var(--blue);}
-.login-btn{width:100%;padding:15px;background:var(--blue);color:#fff;border:none;border-radius:14px;font-size:16px;font-weight:600;font-family:inherit;cursor:pointer;margin-top:6px;}
+.login-btn{width:100%;padding:15px;background:var(--yellow);color:#000;border:none;border-radius:14px;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer;margin-top:6px;}
 .login-err{color:var(--red);font-size:13px;text-align:center;margin-top:10px;min-height:18px;}
+
+/* ── SPLASH ── */
+#splash-screen{position:fixed;inset:0;background:var(--bg);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;transition:opacity .3s;}
+#splash-screen.hidden{opacity:0;pointer-events:none;}
 
 /* ── OAUTH LOADING ── */
 #oauth-screen{position:fixed;inset:0;background:var(--bg);z-index:9998;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px;}
@@ -42,9 +47,10 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 #oauth-screen p{color:var(--text2);font-size:14px;text-align:center;}
 
 /* ── HEADER ── */
-.header{padding:calc(50px + var(--safe-top)) 18px 8px;background:var(--bg);position:sticky;top:0;z-index:100;}
+.header{padding:calc(50px + var(--safe-top)) 18px 8px;background:var(--bg);position:sticky;top:0;z-index:100;border-bottom:0.5px solid var(--sep);}
 .header-row{display:flex;justify-content:space-between;align-items:flex-end;}
 .header-title{font-size:24px;font-weight:700;letter-spacing:-0.5px;}
+.header-title span{color:var(--yellow);}
 .header-subtitle{font-size:12px;color:var(--text2);margin-top:1px;}
 .account-dots{display:flex;gap:6px;align-items:center;}
 .account-dot{display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:4px 9px;border-radius:20px;border:0.5px solid var(--border);background:var(--card);}
@@ -54,16 +60,21 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .dot.syncing{background:var(--orange);}
 
 /* ── NAV ── */
-.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(8,13,30,0.95);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:0.5px solid var(--border);display:flex;justify-content:space-around;align-items:center;padding:8px 0 calc(12px + var(--safe-bottom));z-index:200;}
+.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(0,0,0,0.97);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:0.5px solid var(--border);display:flex;justify-content:space-around;align-items:center;padding:8px 0 calc(12px + var(--safe-bottom));z-index:200;}
 .nav-item{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:4px 12px;border:none;background:none;font-family:inherit;color:var(--text2);transition:color .2s;}
-.nav-item.active{color:var(--blue);}
+.nav-item.active{color:var(--yellow);}
 .nav-icon{font-size:20px;line-height:1;}
 .nav-label{font-size:10px;font-weight:500;}
 
 /* ── PANELS ── */
+#panels-container{position:relative;}
 .panel{display:none;padding:0 0 16px;background:var(--bg);}
-.panel.active{display:block;animation:fadeIn .12s ease;}
-@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+.panel.active{display:block;animation:panelIn .22s cubic-bezier(0.4,0,0.2,1);}
+.panel.slide-from-right{animation:slideFromRight .22s cubic-bezier(0.4,0,0.2,1);}
+.panel.slide-from-left{animation:slideFromLeft .22s cubic-bezier(0.4,0,0.2,1);}
+@keyframes panelIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+@keyframes slideFromRight{from{opacity:0;transform:translateX(40px);}to{opacity:1;transform:translateX(0);}}
+@keyframes slideFromLeft{from{opacity:0;transform:translateX(-40px);}to{opacity:1;transform:translateX(0);}}
 
 /* ── CARDS / UTILS ── */
 .card{background:var(--card);border-radius:var(--r);margin:10px 16px 0;overflow:hidden;border:0.5px solid var(--border);}
@@ -106,7 +117,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .corte-hero p{font-size:13px;color:var(--text2);}
 .big-btn{width:calc(100% - 32px);margin:0 16px;padding:16px;border-radius:16px;font-size:16px;font-weight:700;font-family:inherit;border:none;cursor:pointer;transition:transform .1s,opacity .15s;}
 .big-btn:active{transform:scale(0.97);opacity:.85;}
-.btn-blue{background:var(--blue);color:#fff;box-shadow:0 4px 20px rgba(77,159,255,0.3);}
+.btn-blue{background:var(--yellow);color:#000;box-shadow:0 4px 20px rgba(255,230,0,0.25);}
 .btn-green{background:var(--green);color:#000;box-shadow:0 4px 20px rgba(50,215,75,0.3);}
 .btn-orange{background:var(--orange);color:#000;}
 .text-block{margin:10px 16px 0;background:var(--card);border-radius:var(--r);border:0.5px solid var(--border);overflow:hidden;}
@@ -138,7 +149,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .stock-input.warn{border-color:rgba(255,159,10,0.4);color:var(--orange);}
 .stock-input.danger{border-color:rgba(255,69,58,0.4);color:var(--red);}
 .stock-actions{display:flex;gap:10px;padding:12px 16px;}
-.stock-save-btn{flex:1;padding:13px;background:var(--blue);color:#fff;border:none;border-radius:14px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;}
+.stock-save-btn{flex:1;padding:13px;background:var(--yellow);color:#000;border:none;border-radius:14px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;}
 .stock-save-btn:active{opacity:.8;}
 
 /* ── CONFIG PANEL ── */
@@ -148,7 +159,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .config-field label{font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.3px;}
 .config-field input{width:100%;padding:12px 14px;border:0.5px solid var(--border);border-radius:12px;background:rgba(255,255,255,0.06);color:var(--text);font-size:14px;font-family:inherit;outline:none;}
 .config-field input:focus{border-color:var(--blue);}
-.config-save-btn{width:100%;padding:13px;background:var(--blue);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;margin-top:4px;}
+.config-save-btn{width:100%;padding:13px;background:var(--yellow);color:#000;border:none;border-radius:12px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;margin-top:4px;}
 .account-card{background:var(--card);border-radius:var(--r);border:0.5px solid var(--border);padding:14px 16px;margin-bottom:10px;}
 .account-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
 .account-card-name{font-size:16px;font-weight:700;}
@@ -169,7 +180,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .modal-title{font-size:17px;font-weight:700;margin-bottom:14px;}
 .modal-actions{display:flex;gap:10px;margin-top:14px;}
 .modal-cancel{flex:1;padding:13px;border-radius:12px;background:rgba(255,255,255,0.07);border:0.5px solid var(--border);color:var(--text);font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;}
-.modal-ok{flex:1;padding:13px;border-radius:12px;background:var(--blue);border:none;color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;}
+.modal-ok{flex:1;padding:13px;border-radius:12px;background:var(--yellow);border:none;color:#000;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;}
 .modal-danger{flex:1;padding:13px;border-radius:12px;background:rgba(255,69,58,0.15);border:0.5px solid rgba(255,69,58,0.3);color:var(--red);font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;}
 
 /* ── SCAN MODAL ── */
@@ -178,6 +189,16 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .scan-line{position:absolute;left:10%;right:10%;height:2px;background:var(--red);top:50%;transform:translateY(-50%);box-shadow:0 0 8px rgba(255,69,58,0.8);}
 #scan-result-list{max-height:160px;overflow-y:auto;}
 .scan-result-item{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-radius:10px;background:rgba(50,215,75,0.1);border:0.5px solid rgba(50,215,75,0.25);margin-bottom:6px;font-size:13px;}
+
+/* ── PICKING LIST ── */
+.picking-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-top:0.5px solid var(--sep);}
+.picking-row:first-child{border-top:none;}
+.picking-product{font-size:14px;font-weight:600;}
+.picking-size{font-size:12px;color:var(--text2);margin-top:1px;}
+.picking-qty{font-size:28px;font-weight:700;color:var(--yellow);min-width:36px;text-align:right;}
+.picking-total{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-top:0.5px solid var(--border);margin-top:2px;background:rgba(255,230,0,0.05);}
+.picking-total-label{font-size:12px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;}
+.picking-total-num{font-size:18px;font-weight:700;color:var(--yellow);}
 
 /* ── STOCK CONFIRM MODAL ── */
 .stock-change-item{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:0.5px solid var(--sep);font-size:13px;}
@@ -207,10 +228,17 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 </head>
 <body>
 
+<!-- SPLASH -->
+<div id="splash-screen">
+  <div style="font-size:52px">👟</div>
+  <div style="font-size:18px;font-weight:700">FullSports <span style="color:var(--yellow)">Panel</span></div>
+  <div style="font-size:13px;color:var(--text2);margin-top:4px">Cargando...</div>
+</div>
+
 <!-- LOGIN -->
 <div id="login-screen" style="display:none">
   <div style="font-size:52px;margin-bottom:16px">👟</div>
-  <h1>FullSports Panel</h1>
+  <h1>FullSports <span style="color:var(--yellow)">Panel</span></h1>
   <p>Gestión de ventas MercadoLibre</p>
   <div class="login-field"><input type="email" id="login-email" placeholder="Email" inputmode="email" autocomplete="email"></div>
   <div class="login-field"><input type="password" id="login-pass" placeholder="Contraseña" autocomplete="current-password"></div>
@@ -229,7 +257,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 <div class="header" id="main-header" style="display:none">
   <div class="header-row">
     <div>
-      <div class="header-title">FullSports Panel</div>
+      <div class="header-title">FullSports <span>Panel</span></div>
       <div class="header-subtitle" id="header-time"></div>
     </div>
     <div class="account-dots">
@@ -245,9 +273,13 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
   </div>
 </div>
 
+<!-- ═══════ PANELES ═══════ -->
+<div id="panels-container">
+
 <!-- ═══════ PANEL DASHBOARD ═══════ -->
 <div id="panel-dashboard" class="panel" style="display:none">
   <div class="refresh-row">
+    <button class="refresh-btn" onclick="abrirScanner()" style="color:var(--purple);border-color:rgba(191,90,242,0.3)">📷 Escanear</button>
     <button class="refresh-btn" onclick="fetchAllOrders()">🔄 Actualizar</button>
   </div>
 
@@ -256,6 +288,9 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 
   <div class="section-label">📦 Punto de Envío <span style="font-size:10px;color:var(--green)">— tope 14:00</span></div>
   <div class="card" id="pe-list"><div class="empty-msg">Sin órdenes Punto de Envío</div></div>
+
+  <div class="section-label">🗃️ Para preparar del depósito</div>
+  <div class="card" id="picking-list"><div class="empty-msg">Sin pedidos pendientes</div></div>
 </div>
 
 <!-- ═══════ PANEL CORTE ═══════ -->
@@ -377,6 +412,8 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
   </div>
 </div>
 
+</div><!-- /panels-container -->
+
 <!-- ═══════ NAV ═══════ -->
 <nav class="nav" id="main-nav" style="display:none">
   <button class="nav-item" id="nav-dashboard" onclick="switchPanel('dashboard',this)">
@@ -480,13 +517,21 @@ window._fbLoadAll = async (col) => {
   return snap.docs.map(d => ({ _id: d.id, ...d.data() }));
 };
 
+function hideSplash() {
+  const s = document.getElementById('splash-screen');
+  s.classList.add('hidden');
+  setTimeout(() => { s.style.display = 'none'; }, 350);
+}
+
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     window._fbUid = user.uid;
     document.getElementById('login-screen').style.display = 'none';
     await window._initApp();
+    hideSplash();
   } else {
     window._fbUid = null;
+    hideSplash();
     document.getElementById('login-screen').style.display = 'flex';
     document.getElementById('main-header').style.display = 'none';
     document.getElementById('main-nav').style.display = 'none';
@@ -494,8 +539,11 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 setTimeout(() => {
-  if (!window._fbUid) document.getElementById('login-screen').style.display = 'flex';
-}, 4000);
+  if (!window._fbUid && document.getElementById('splash-screen').style.display !== 'none') {
+    hideSplash();
+    document.getElementById('login-screen').style.display = 'flex';
+  }
+}, 6000);
 </script>
 
 <!-- ═══ APP JS ═══ -->
@@ -571,18 +619,62 @@ window._initApp = async function() {
 function showMainUI() {
   document.getElementById('main-header').style.display = '';
   document.getElementById('main-nav').style.display = '';
-  document.querySelectorAll('.panel').forEach(p => p.style.display = '');
 }
 
 // ── NAVIGATION ──
-function switchPanel(name, btn) {
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('panel-' + name).classList.add('active');
+const PANEL_ORDER = ['dashboard','corte','stock','config'];
+window._currentPanel = 'dashboard';
+
+function switchPanel(name, btn, direction) {
+  const prev = window._currentPanel;
+  if (prev === name) return;
+  const prevIdx = PANEL_ORDER.indexOf(prev);
+  const nextIdx = PANEL_ORDER.indexOf(name);
+  const dir = direction !== undefined ? direction : (nextIdx > prevIdx ? 'right' : 'left');
+
+  document.querySelectorAll('.panel').forEach(p => {
+    p.classList.remove('active','slide-from-right','slide-from-left');
+    p.style.display = 'none';
+  });
+
+  const panel = document.getElementById('panel-' + name);
+  panel.style.display = '';
+  panel.classList.add('active', dir === 'right' ? 'slide-from-right' : 'slide-from-left');
+
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  else {
+    const nb = document.getElementById('nav-' + name);
+    if (nb) nb.classList.add('active');
+  }
+
+  window._currentPanel = name;
   if (name === 'corte') updateCortePendingCount();
   if (name === 'stock') renderStock();
 }
+
+// ── SWIPE ENTRE PANELES ──
+(function(){
+  let sx=0, sy=0, moving=false;
+  document.addEventListener('touchstart', e => {
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; moving = false;
+  }, {passive:true});
+  document.addEventListener('touchmove', e => { moving = true; }, {passive:true});
+  document.addEventListener('touchend', e => {
+    if (!moving) return;
+    const dx = e.changedTouches[0].clientX - sx;
+    const dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx)) return;
+    // Don't swipe when modal is open
+    if (document.querySelector('.modal-overlay.visible')) return;
+    const idx = PANEL_ORDER.indexOf(window._currentPanel);
+    if (dx < 0 && idx < PANEL_ORDER.length - 1) {
+      switchPanel(PANEL_ORDER[idx + 1], null, 'right');
+    } else if (dx > 0 && idx > 0) {
+      switchPanel(PANEL_ORDER[idx - 1], null, 'left');
+    }
+  }, {passive:true});
+})();
 
 // ── HEADER ──
 function updateHeader() {
@@ -875,6 +967,36 @@ function renderDashboard() {
   const pe   = pending.filter(o => !o.isFlex).sort((a,b) => a.dateCreated > b.dateCreated ? 1 : -1);
   renderOrderList('flex-list', flex, 13);
   renderOrderList('pe-list', pe, 14);
+  renderPickingList(pending);
+}
+
+function renderPickingList(pending) {
+  const el = document.getElementById('picking-list');
+  if (!pending.length) { el.innerHTML = '<div class="empty-msg">Sin pedidos pendientes</div>'; return; }
+  const map = {};
+  pending.forEach(o => {
+    const key = `${o.product}||${o.size}`;
+    map[key] = (map[key] || 0) + 1;
+  });
+  const sorted = Object.entries(map).sort(([a],[b]) => {
+    const [pa, sa] = a.split('||');
+    const [pb, sb] = b.split('||');
+    return pa.localeCompare(pb) || parseInt(sa) - parseInt(sb);
+  });
+  const total = pending.length;
+  el.innerHTML = sorted.map(([key, qty]) => {
+    const [prod, size] = key.split('||');
+    return `<div class="picking-row">
+      <div>
+        <div class="picking-product">${escHtml(prod)}</div>
+        <div class="picking-size">Talle ${size}</div>
+      </div>
+      <div class="picking-qty">${qty}</div>
+    </div>`;
+  }).join('') + `<div class="picking-total">
+    <span class="picking-total-label">Total a preparar</span>
+    <span class="picking-total-num">${total} par${total !== 1 ? 'es' : ''}</span>
+  </div>`;
 }
 
 function renderOrderList(containerId, orders, cutoffHour) {
@@ -1218,7 +1340,9 @@ function imprimirEtiquetas() {
 // ── iOS BACK FIX ──
 history.pushState(null,'',location.href);
 window.addEventListener('popstate', () => history.pushState(null,'',location.href));
-window.addEventListener('pageshow', e => { if (e.persisted) history.pushState(null,'',location.href); });
+window.addEventListener('pageshow', e => {
+  if (e.persisted) { history.pushState(null,'',location.href); location.reload(); }
+});
 </script>
 </body>
 </html>
