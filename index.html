@@ -557,7 +557,7 @@ const PRODUCTOS = ['Total Black','Mostaza','Media caña Mostaza','Borcegos','Car
 const TALLES = [38,39,40,41,42,43,44,45];
 const REDIRECT_URI = 'https://franlafuente-dev.github.io/fullsports-panel/';
 const MELI_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
-const MELI_TOKEN_URL = 'https://fullsports-panel.lafuentefranciscolucas.workers.dev/api/token';
+const MELI_TOKEN_URL = 'https://api.mercadolibre.com/oauth/token';
 const MELI_API = 'https://api.mercadolibre.com';
 
 // ── ESTADO ──
@@ -761,7 +761,7 @@ async function handleOAuthCallback(params) {
     });
     if (window._config.secretKey) body.set('client_secret', window._config.secretKey);
     const resp = await fetch(MELI_TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body });
-    if (!resp.ok) { const e = await resp.json(); throw new Error(e.message || 'Error al obtener token'); }
+    if (!resp.ok) { let e = {}; try { e = await resp.json(); } catch {} throw new Error(`Error ${resp.status}: ${e.message || e.error || resp.statusText}`); }
     const tokens = await resp.json();
     // Get seller info
     const me = await fetch(`${MELI_API}/users/me`, { headers: { Authorization: 'Bearer ' + tokens.access_token } }).then(r => r.json());
