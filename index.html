@@ -994,11 +994,9 @@ function extractProductAndSize(item) {
 function normalizeOrder(order, shipment, accountId) {
   const payment = order.payments?.[0] || {};
   const logType  = shipment?.logistic_type || '';
-  const shipMode = shipment?.mode || '';
-  // En Argentina MELI FLEX usa: cross_docking, xd_drop_off, me1, o tiene conductor (mode me1)
-  const FLEX_LOG_TYPES = ['cross_docking', 'xd_drop_off', 'me1'];
-  const isFlex = FLEX_LOG_TYPES.includes(logType) || shipMode === 'me1'
-    || (shipment?.shipping_option?.name || '').toLowerCase().includes('flex');
+  // self_service = FLEX (driver retira en domicilio del vendedor)
+  // xd_drop_off  = PE (vendedor lleva a sucursal Correo/OCA)
+  const isFlex = logType === 'self_service';
   const locality = shipment?.receiver_address?.city?.name
     || shipment?.receiver_address?.neighborhood?.name || '';
   const province = shipment?.receiver_address?.state?.name || '';
@@ -1069,10 +1067,10 @@ async function fetchOrdersForAccount(accountId) {
 
       const existing = window._orders.find(o => o.id === String(order.id));
       if (existing) {
-        const wasShipped = existing.shipmentStatus === 'shipped';
+        const wasShipped = shipCategory(existing.shipmentStatus) === 'shipped';
         const fresh = normalizeOrder(order, shipment, accountId);
         Object.assign(existing, fresh, { prepared: existing.prepared, stockDiscounted: existing.stockDiscounted, corteId: existing.corteId });
-        if (wasShipped && existing.shipmentStatus === 'delivered') {
+        if (wasShipped && shipCategory(existing.shipmentStatus) === 'delivered') {
           playAlertSound(false);
           showToast(`✅ Entregado: ${existing.buyerName}`, 6000);
           if ('Notification' in window && Notification.permission === 'granted') {
@@ -1128,13 +1126,25 @@ function getCountdown(targetHour) {
   return { text, cls };
 }
 
+const MELI_SHIPPED   = ['shipped','in_transit','on_the_way','near_destination','soon_deliver','first_visit'];
+const MELI_DELIVERED = ['delivered'];
+const MELI_CANCELLED = ['cancelled','voided','null'];
+const MELI_DEPOSITO  = ['pending','handling','ready_to_ship','waiting_for_withdrawal'];
+
+function shipCategory(status) {
+  if (MELI_CANCELLED.includes(status)) return 'cancelled';
+  if (MELI_DELIVERED.includes(status)) return 'delivered';
+  if (MELI_SHIPPED.includes(status))   return 'shipped';
+  return 'deposito'; // pending, handling, ready_to_ship, o cualquier desconocido
+}
+
 function renderDashboard() {
-  const activos    = window._orders.filter(o => o.shipmentStatus !== 'cancelled');
-  const enDeposito = activos.filter(o => !['shipped','delivered','not_delivered'].includes(o.shipmentStatus));
-  const porPreparar = enDeposito.filter(o => !o.prepared).sort((a,b) => a.isFlex === b.isFlex ? 0 : a.isFlex ? -1 : 1);
+  const activos      = window._orders.filter(o => shipCategory(o.shipmentStatus) !== 'cancelled');
+  const enDeposito   = activos.filter(o => shipCategory(o.shipmentStatus) === 'deposito');
+  const enCamino     = activos.filter(o => shipCategory(o.shipmentStatus) === 'shipped');
+  const entregados   = activos.filter(o => shipCategory(o.shipmentStatus) === 'delivered');
+  const porPreparar  = enDeposito.filter(o => !o.prepared).sort((a,b) => a.isFlex === b.isFlex ? 0 : a.isFlex ? -1 : 1);
   const listosDespach = enDeposito.filter(o => o.prepared).sort((a,b) => a.isFlex === b.isFlex ? 0 : a.isFlex ? -1 : 1);
-  const enCamino   = activos.filter(o => o.shipmentStatus === 'shipped');
-  const entregados = activos.filter(o => o.shipmentStatus === 'delivered');
   renderPickingList(porPreparar);
   renderPorPreparar(porPreparar);
   renderPreparados(listosDespach);
@@ -1265,11 +1275,7 @@ function abrirDetalle(orderId) {
     <div style="margin-bottom:8px"><b>Cuenta:</b> ${o.accountId}</div>
     <div style="margin-bottom:8px"><b>Orden MELI:</b> #${o.id}</div>
     <div style="margin-bottom:8px"><b>Fecha:</b> ${new Date(o.dateCreated).toLocaleString('es-AR')}</div>
-    <div style="margin-bottom:8px"><b>Estado envío:</b> ${o.shipmentStatus || '—'}</div>
-    <div style="margin-bottom:8px"><b>FLEX detectado:</b> ${o.isFlex ? 'SÍ' : 'NO'}</div>
-    <div style="font-size:11px;color:var(--text3);margin-top:8px;padding-top:8px;border-top:0.5px solid var(--sep)">
-      logistic_type: ${o._dbg?.logistic_type || '—'} | mode: ${o._dbg?.mode || '—'} | opt: ${o._dbg?.opt || '—'}
-    </div>
+    <div><b>Estado envío:</b> ${o.shipmentStatus || '—'}</div>
   `;
   const btn = document.getElementById('detail-prep-btn');
   btn.textContent = o.prepared ? '↩ Marcar como no preparado' : '✓ Marcar como preparado';
