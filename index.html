@@ -1090,6 +1090,9 @@ async function fetchOrdersForAccount(accountId) {
         added.push(normalized);
       }
     }
+    // Dedup: eliminar entradas con ID repetido (queda la última)
+    const seen = new Set();
+    window._orders = window._orders.filter(o => { if (seen.has(o.id)) return false; seen.add(o.id); return true; });
     // Limpiar órdenes viejas entregadas hace más de 48hs
     window._orders = window._orders.filter(o =>
       !['delivered','not_delivered','cancelled'].includes(o.shipmentStatus) ||
@@ -1207,13 +1210,11 @@ function orderCard(o, showPrepBtn = false) {
   const amountLine = o.isFlex && o.flexCost > 0
     ? `$${fmt(o.netMeli)} − $${fmt(o.flexCost)} FLEX = <b>$${fmt(o.netAmount)}</b>`
     : `$${fmt(o.netAmount)}`;
-  const etaText = fmtEta(o.estimatedDelivery);
   return `<div class="order-card" onclick="abrirDetalle('${o.id}')">
     <div class="order-top">${badge}${chip}</div>
     <div class="order-buyer">${escHtml(o.buyerName)}</div>
     ${itemsHtml}
     <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
-    <div style="font-size:13px;color:var(--green);margin:2px 0 6px">📅 ${etaText || 'Sin fecha estimada'}</div>
     <div class="order-footer">
       <span class="order-amount" style="font-size:13px">${amountLine}</span>
       ${prepBtn}
@@ -1248,7 +1249,6 @@ function renderPreparados(orders) {
       <div class="order-buyer">${escHtml(o.buyerName)}</div>
       ${itemsHtml}
       <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
-      <div style="font-size:13px;color:var(--green);margin:2px 0 6px">📅 ${etaText || 'Sin fecha estimada'}</div>
       <div class="order-footer">
         <span class="order-amount" style="font-size:13px">${amountLine}</span>
         <button class="prep-btn" style="background:rgba(48,209,88,0.18);color:var(--green);border:1px solid var(--green)" onclick="dispatchOrder('${o.id}',event)">🚚 Despachar</button>
