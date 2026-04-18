@@ -1031,8 +1031,7 @@ function normalizeOrder(order, shipment, accountId) {
     locality,
     iibb,
     items,
-    // Para compatibilidad con funciones que leen o.product / o.size (single item)
-    product: items[0]?.product || 'Desconocido',
+    product: items[0]?.product || 'Sin identificar',
     size: items[0]?.size || 0,
     netMeli,
     flexCost,
@@ -1046,6 +1045,7 @@ function normalizeOrder(order, shipment, accountId) {
     stockDiscounted: false,
     corteId: null,
     dateCreated: order.date_created,
+    _dbg: { logistic_type: logType, mode: shipMode, opt: shipment?.shipping_option?.name || '' },
   };
 }
 
@@ -1265,7 +1265,11 @@ function abrirDetalle(orderId) {
     <div style="margin-bottom:8px"><b>Cuenta:</b> ${o.accountId}</div>
     <div style="margin-bottom:8px"><b>Orden MELI:</b> #${o.id}</div>
     <div style="margin-bottom:8px"><b>Fecha:</b> ${new Date(o.dateCreated).toLocaleString('es-AR')}</div>
-    <div><b>Estado envío:</b> ${o.shipmentStatus || '—'}</div>
+    <div style="margin-bottom:8px"><b>Estado envío:</b> ${o.shipmentStatus || '—'}</div>
+    <div style="margin-bottom:8px"><b>FLEX detectado:</b> ${o.isFlex ? 'SÍ' : 'NO'}</div>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px;padding-top:8px;border-top:0.5px solid var(--sep)">
+      logistic_type: ${o._dbg?.logistic_type || '—'} | mode: ${o._dbg?.mode || '—'} | opt: ${o._dbg?.opt || '—'}
+    </div>
   `;
   const btn = document.getElementById('detail-prep-btn');
   btn.textContent = o.prepared ? '↩ Marcar como no preparado' : '✓ Marcar como preparado';
