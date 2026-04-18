@@ -942,10 +942,10 @@ const COLOR_MAP = {
 };
 
 function extractProductAndSize(item) {
-  // 1. Intentar por SKU (seller_custom_field)
-  const sku = (item.seller_custom_field || '').toUpperCase();
+  // 1. Intentar por SKU (seller_custom_field) — acepta con o sin guión: MOST-41 o MOST41
+  const sku = (item.seller_custom_field || '').toUpperCase().replace(/\s/g,'');
   if (sku) {
-    const m = sku.match(/^([A-Z]+)-(\d+)$/);
+    const m = sku.match(/^([A-Z]+)-?(\d+)$/);
     if (m) {
       const prefix = m[1];
       const size   = parseInt(m[2]);
@@ -974,8 +974,8 @@ function extractProductAndSize(item) {
   return { product, size };
 }
 
-function normalizeOrder(order, shipment, accountId) {
-  const item = order.order_items[0];
+function normalizeOrder(order, shipment, accountId, item, itemRatio = 1) {
+  if (!item) item = order.order_items[0];
   const payment = order.payments?.[0] || {};
   const { product, size } = extractProductAndSize(item);
 
@@ -988,9 +988,10 @@ function normalizeOrder(order, shipment, accountId) {
   const province = shipment?.receiver_address?.state?.name || '';
   const shippingCost = isFlex ? getFlexCost(locality) : 0;
 
-  const amount = payment.net_received_amount > 0
+  const totalNet = payment.net_received_amount > 0
     ? payment.net_received_amount
     : Math.round((payment.total_paid_amount || 0) * 0.82);
+  const amount = Math.round(totalNet * itemRatio);
   const netAmount = amount - shippingCost;
   const iibb = payment.taxes_amount || 0;
   const buyerName = `${order.buyer?.first_name || ''} ${order.buyer?.last_name || ''}`.trim() || order.buyer?.nickname || 'Comprador';
@@ -1040,24 +1041,32 @@ async function fetchOrdersForAccount(accountId) {
       // Ignorar entregados hace más de 48hs
       if (['delivered','not_delivered','cancelled'].includes(shipStatus) && orderDate < cutoff48h) continue;
 
-      const existing = window._orders.find(o => o.id === String(order.id));
-      if (existing) {
-        const wasShipped = existing.shipmentStatus === 'shipped';
-        const fresh = normalizeOrder(order, shipment, accountId);
-        Object.assign(existing, fresh, { prepared: existing.prepared, corteId: existing.corteId });
-        // Notificar entrega
-        if (wasShipped && existing.shipmentStatus === 'delivered') {
-          playAlertSound(false);
-          showToast(`✅ Entregado: ${existing.buyerName} — ${existing.product} T${existing.size}`, 6000);
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('📦 Paquete entregado', { body: `${existing.buyerName} · ${existing.product} Talle ${existing.size}` });
+      // Generar un entry por cada ítem en la orden
+      const items = order.order_items || [];
+      for (let idx = 0; idx < items.length; idx++) {
+        const entryId = items.length > 1 ? `${order.id}_${idx}` : String(order.id);
+        // Calcular monto proporcional por ítem
+        const totalUnitPrice = items.reduce((s, i) => s + (i.unit_price || 0) * (i.quantity || 1), 0);
+        const itemRatio = totalUnitPrice > 0 ? ((items[idx].unit_price || 0) * (items[idx].quantity || 1)) / totalUnitPrice : 1 / items.length;
+        const existing = window._orders.find(o => o.id === entryId);
+        if (existing) {
+          const wasShipped = existing.shipmentStatus === 'shipped';
+          const fresh = normalizeOrder(order, shipment, accountId, items[idx], itemRatio);
+          Object.assign(existing, fresh, { prepared: existing.prepared, stockDiscounted: existing.stockDiscounted, corteId: existing.corteId });
+          if (wasShipped && existing.shipmentStatus === 'delivered') {
+            playAlertSound(false);
+            showToast(`✅ Entregado: ${existing.buyerName} — ${existing.product} T${existing.size}`, 6000);
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('📦 Paquete entregado', { body: `${existing.buyerName} · ${existing.product} Talle ${existing.size}` });
+            }
           }
+        } else {
+          const normalized = normalizeOrder(order, shipment, accountId, items[idx], itemRatio);
+          normalized.id = entryId;
+          window._orders.push(normalized);
+          added.push(normalized);
         }
-        continue;
       }
-      const normalized = normalizeOrder(order, shipment, accountId);
-      window._orders.push(normalized);
-      added.push(normalized);
     }
     // Limpiar órdenes viejas entregadas hace más de 48hs
     window._orders = window._orders.filter(o =>
