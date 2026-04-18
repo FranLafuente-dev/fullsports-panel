@@ -974,29 +974,34 @@ function extractProductAndSize(item) {
   return { product, size };
 }
 
-function normalizeOrder(order, shipment, accountId, item, itemRatio = 1) {
-  if (!item) item = order.order_items[0];
+function normalizeOrder(order, shipment, accountId) {
   const payment = order.payments?.[0] || {};
-  const { product, size } = extractProductAndSize(item);
-
   const logType = shipment?.logistic_type || '';
-  const isFlex = logType === 'cross_docking';
-  const deadlineHour = isFlex ? 13 : 14;
-
+  const isFlex  = logType === 'cross_docking';
   const locality = shipment?.receiver_address?.city?.name
     || shipment?.receiver_address?.neighborhood?.name || '';
   const province = shipment?.receiver_address?.state?.name || '';
-  const shippingCost = isFlex ? getFlexCost(locality) : 0;
+  const flexCost = isFlex ? getFlexCost(locality) : 0;
 
-  const totalNet = payment.net_received_amount > 0
+  // PE: net_received_amount ya tiene el envío descontado por MELI
+  // FLEX: net_received_amount NO tiene el envío descontado, lo restamos nosotros
+  const netMeli = payment.net_received_amount > 0
     ? payment.net_received_amount
     : Math.round((payment.total_paid_amount || 0) * 0.82);
-  const amount = Math.round(totalNet * itemRatio);
-  const netAmount = amount - shippingCost;
+  const netAmount = netMeli - flexCost;
+
   const iibb = payment.taxes_amount || 0;
-  const buyerName = `${order.buyer?.first_name || ''} ${order.buyer?.last_name || ''}`.trim() || order.buyer?.nickname || 'Comprador';
+  const buyerName = `${order.buyer?.first_name || ''} ${order.buyer?.last_name || ''}`.trim()
+    || order.buyer?.nickname || 'Comprador';
   const estimatedDelivery = shipment?.estimated_delivery_time?.date
     || shipment?.estimated_delivery_limit?.date || null;
+
+  // Un entry por ítem de la orden
+  const items = (order.order_items || []).map(it => {
+    const { product, size } = extractProductAndSize(it);
+    return { product, size, sku: it.seller_custom_field || '', title: it.item?.title || '' };
+  });
+
   return {
     id: String(order.id),
     accountId,
@@ -1004,13 +1009,15 @@ function normalizeOrder(order, shipment, accountId, item, itemRatio = 1) {
     province,
     locality,
     iibb,
-    product,
-    size,
-    amount,
-    shippingCost,
+    items,
+    // Para compatibilidad con funciones que leen o.product / o.size (single item)
+    product: items[0]?.product || 'Desconocido',
+    size: items[0]?.size || 0,
+    netMeli,
+    flexCost,
     netAmount,
     isFlex,
-    deadlineHour,
+    deadlineHour: isFlex ? 13 : 14,
     shipmentId: String(order.shipping?.id || ''),
     shipmentStatus: shipment?.status || 'ready_to_ship',
     estimatedDelivery,
@@ -1018,8 +1025,6 @@ function normalizeOrder(order, shipment, accountId, item, itemRatio = 1) {
     stockDiscounted: false,
     corteId: null,
     dateCreated: order.date_created,
-    sku: item.seller_custom_field || '',
-    title: item.item?.title || '',
   };
 }
 
@@ -1041,31 +1046,22 @@ async function fetchOrdersForAccount(accountId) {
       // Ignorar entregados hace más de 48hs
       if (['delivered','not_delivered','cancelled'].includes(shipStatus) && orderDate < cutoff48h) continue;
 
-      // Generar un entry por cada ítem en la orden
-      const items = order.order_items || [];
-      for (let idx = 0; idx < items.length; idx++) {
-        const entryId = items.length > 1 ? `${order.id}_${idx}` : String(order.id);
-        // Calcular monto proporcional por ítem
-        const totalUnitPrice = items.reduce((s, i) => s + (i.unit_price || 0) * (i.quantity || 1), 0);
-        const itemRatio = totalUnitPrice > 0 ? ((items[idx].unit_price || 0) * (items[idx].quantity || 1)) / totalUnitPrice : 1 / items.length;
-        const existing = window._orders.find(o => o.id === entryId);
-        if (existing) {
-          const wasShipped = existing.shipmentStatus === 'shipped';
-          const fresh = normalizeOrder(order, shipment, accountId, items[idx], itemRatio);
-          Object.assign(existing, fresh, { prepared: existing.prepared, stockDiscounted: existing.stockDiscounted, corteId: existing.corteId });
-          if (wasShipped && existing.shipmentStatus === 'delivered') {
-            playAlertSound(false);
-            showToast(`✅ Entregado: ${existing.buyerName} — ${existing.product} T${existing.size}`, 6000);
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification('📦 Paquete entregado', { body: `${existing.buyerName} · ${existing.product} Talle ${existing.size}` });
-            }
+      const existing = window._orders.find(o => o.id === String(order.id));
+      if (existing) {
+        const wasShipped = existing.shipmentStatus === 'shipped';
+        const fresh = normalizeOrder(order, shipment, accountId);
+        Object.assign(existing, fresh, { prepared: existing.prepared, stockDiscounted: existing.stockDiscounted, corteId: existing.corteId });
+        if (wasShipped && existing.shipmentStatus === 'delivered') {
+          playAlertSound(false);
+          showToast(`✅ Entregado: ${existing.buyerName}`, 6000);
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('📦 Paquete entregado', { body: `${existing.buyerName} · ${existing.items?.map(i=>i.product+' T'+i.size).join(', ')}` });
           }
-        } else {
-          const normalized = normalizeOrder(order, shipment, accountId, items[idx], itemRatio);
-          normalized.id = entryId;
-          window._orders.push(normalized);
-          added.push(normalized);
         }
+      } else {
+        const normalized = normalizeOrder(order, shipment, accountId);
+        window._orders.push(normalized);
+        added.push(normalized);
       }
     }
     // Limpiar órdenes viejas entregadas hace más de 48hs
@@ -1131,8 +1127,11 @@ function renderPickingList(pending) {
   if (!pending.length) { el.innerHTML = '<div class="empty-msg">Sin pedidos pendientes</div>'; return; }
   const map = {};
   pending.forEach(o => {
-    const key = `${o.product}||${o.size}`;
-    map[key] = (map[key] || 0) + 1;
+    const items = o.items || [{ product: o.product, size: o.size }];
+    items.forEach(i => {
+      const key = `${i.product}||${i.size}`;
+      map[key] = (map[key] || 0) + 1;
+    });
   });
   const sorted = Object.entries(map).sort(([a],[b]) => {
     const [pa, sa] = a.split('||');
@@ -1163,13 +1162,20 @@ function orderCard(o, showPrepBtn = false) {
   const prepBtn = showPrepBtn
     ? `<button class="prep-btn" onclick="togglePrep('${o.id}',event)">Marcar preparado</button>`
     : `<button class="prep-btn done" onclick="togglePrep('${o.id}',event)">✓ Listo</button>`;
+  const items = o.items || [{ product: o.product, size: o.size }];
+  const itemsHtml = items.map(i =>
+    `<div class="order-product">${escHtml(i.product)} · Talle ${i.size}</div>`
+  ).join('');
+  const amountLine = o.isFlex && o.flexCost > 0
+    ? `$${fmt(o.netMeli)} − $${fmt(o.flexCost)} FLEX = <b>$${fmt(o.netAmount)}</b>`
+    : `$${fmt(o.netAmount)}`;
   return `<div class="order-card" onclick="abrirDetalle('${o.id}')">
     <div class="order-top">${badge}${chip}</div>
     <div class="order-buyer">${escHtml(o.buyerName)}</div>
-    <div class="order-product">${escHtml(o.product)} · Talle ${o.size}</div>
+    ${itemsHtml}
     <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
     <div class="order-footer">
-      <span class="order-amount">$${fmt(o.netAmount)}</span>
+      <span class="order-amount" style="font-size:13px">${amountLine}</span>
       ${prepBtn}
     </div>
   </div>`;
@@ -1266,15 +1272,19 @@ function togglePrep(orderId, evt) {
   const o = window._orders.find(x => x.id === orderId);
   if (!o) return;
   o.prepared = !o.prepared;
-  // Descontar stock al preparar, reponer si se desmarca
+  const items = o.items || [{ product: o.product, size: o.size }];
   if (o.prepared && !o.stockDiscounted) {
-    if (!window._stock[o.product]) window._stock[o.product] = {};
-    window._stock[o.product][o.size] = Math.max(0, (window._stock[o.product][o.size] || 0) - 1);
+    items.forEach(i => {
+      if (!window._stock[i.product]) window._stock[i.product] = {};
+      window._stock[i.product][i.size] = Math.max(0, (window._stock[i.product][i.size] || 0) - 1);
+    });
     o.stockDiscounted = true;
     saveStock();
   } else if (!o.prepared && o.stockDiscounted) {
-    if (!window._stock[o.product]) window._stock[o.product] = {};
-    window._stock[o.product][o.size] = (window._stock[o.product][o.size] || 0) + 1;
+    items.forEach(i => {
+      if (!window._stock[i.product]) window._stock[i.product] = {};
+      window._stock[i.product][i.size] = (window._stock[i.product][i.size] || 0) + 1;
+    });
     o.stockDiscounted = false;
     saveStock();
   }
@@ -1330,35 +1340,44 @@ function generateAccountText(accountId, orders) {
   const name = accountId === 'capi' ? 'capi' : 'enano';
   let lines = [`Ventas meli ${name}`];
   let totalNet = 0;
+  let totalPares = 0;
   orders.forEach((o, i) => {
+    const items = o.items || [{ product: o.product, size: o.size }];
+    const itemsStr = items.map(it => `${it.product} ${it.size}`).join(' + ');
     let line = `${i+1}. ${o.buyerName}`;
     if (accountId === 'enano' && o.iibb > 0) {
       line += ` (${o.province} ya te retuvo de IIBB $${fmtIIBB(o.iibb)})`;
     }
-    line += ` - ${o.product} ${o.size}`;
-    if (o.isFlex && o.shippingCost > 0) {
-      line += ` - acreditado $${fmt(o.amount)} envío flex $${fmt(o.shippingCost)} total de esta venta $${fmt(o.netAmount)}`;
-      totalNet += o.netAmount;
+    line += ` - ${itemsStr}`;
+    if (o.isFlex && o.flexCost > 0) {
+      line += ` - acreditado $${fmt(o.netMeli)} envío flex $${fmt(o.flexCost)} total de esta venta $${fmt(o.netAmount)}`;
     } else {
-      line += ` - se acreditó $${fmt(o.amount)}`;
-      totalNet += o.amount;
+      line += ` - se acreditó $${fmt(o.netAmount)}`;
     }
+    totalNet += o.netAmount;
+    totalPares += items.length;
     lines.push(line);
   });
   lines.push('');
   lines.push(`*Total acreditado ${name} $${fmt(totalNet)}*`);
-  lines.push(`*Total pares: ${orders.length}*`);
+  lines.push(`*Total pares: ${totalPares}*`);
   return lines.join('\n');
 }
 
 function generateCostText(orders) {
   const lines = [`*Costos del corte:*`];
+  let totalCost = 0;
+  let totalPares = 0;
   orders.forEach(o => {
-    const cost = o.size <= 42 ? 21900 : 22400;
-    lines.push(`*${o.product} ${o.size} → $${fmt(cost)}*`);
+    const items = o.items || [{ product: o.product, size: o.size }];
+    items.forEach(i => {
+      const cost = i.size <= 42 ? 21900 : 22400;
+      lines.push(`*${i.product} ${i.size} → $${fmt(cost)}*`);
+      totalCost += cost;
+      totalPares++;
+    });
   });
-  const total = orders.reduce((s,o) => s + (o.size <= 42 ? 21900 : 22400), 0);
-  lines.push(`*${orders.length} par${orders.length!==1?'es':''} = $${fmt(total)}*`);
+  lines.push(`*${totalPares} par${totalPares!==1?'es':''} = $${fmt(totalCost)}*`);
   return lines.join('\n');
 }
 
