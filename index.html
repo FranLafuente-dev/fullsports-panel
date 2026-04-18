@@ -795,8 +795,8 @@ async function conectarCuenta(accountId) {
   if (!window._config.appId) { showToast('Primero guardá el App ID en Config'); switchPanel('config', document.getElementById('nav-config')); return; }
   const verifier = await generateCodeVerifier();
   const challenge = await generateCodeChallenge(verifier);
-  sessionStorage.setItem('meli_verifier', verifier);
-  sessionStorage.setItem('meli_account', accountId);
+  localStorage.setItem('meli_verifier', verifier);
+  localStorage.setItem('meli_account', accountId);
   const url = `${MELI_AUTH_URL}?response_type=code&client_id=${window._config.appId}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&code_challenge=${challenge}&code_challenge_method=S256&state=${accountId}`;
   location.href = url;
 }
@@ -805,8 +805,8 @@ async function handleOAuthCallback(params) {
   const oauthScreen = document.getElementById('oauth-screen');
   oauthScreen.style.display = 'flex';
   const code = params.get('code');
-  const state = params.get('state') || sessionStorage.getItem('meli_account') || 'capi';
-  const verifier = sessionStorage.getItem('meli_verifier') || '';
+  const state = params.get('state') || localStorage.getItem('meli_account') || 'capi';
+  const verifier = localStorage.getItem('meli_verifier') || '';
   // Clean URL
   history.replaceState({}, '', location.pathname);
   try {
@@ -837,8 +837,8 @@ async function handleOAuthCallback(params) {
     };
     window._accounts[state] = accountData;
     await window._fbSave('accounts/' + state, accountData);
-    sessionStorage.removeItem('meli_verifier');
-    sessionStorage.removeItem('meli_account');
+    localStorage.removeItem('meli_verifier');
+    localStorage.removeItem('meli_account');
     document.getElementById('oauth-icon').textContent = '✅';
     document.getElementById('oauth-title').textContent = `¡Cuenta ${state} conectada!`;
     document.getElementById('oauth-msg').textContent = `Vendedor: ${me.nickname}`;
