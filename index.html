@@ -13,18 +13,18 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 :root{
-  --bg:#000000;--bg2:#0a0a0a;--card:rgba(255,255,255,0.05);--card-solid:#111111;
-  --text:#fff;--text2:rgba(255,255,255,0.55);--text3:rgba(255,255,255,0.22);
-  --border:rgba(255,255,255,0.1);--sep:rgba(255,255,255,0.06);
-  --blue:#4D9FFF;--green:#32D74B;--red:#FF453A;--orange:#FF9F0A;
+  --bg:#000000;--bg2:#1c1c1e;--card:#1c1c1e;--card-solid:#2c2c2e;
+  --text:#ffffff;--text2:rgba(235,235,245,0.6);--text3:rgba(235,235,245,0.3);
+  --border:rgba(84,84,88,0.65);--sep:rgba(84,84,88,0.35);
+  --blue:#0A84FF;--green:#30D158;--red:#FF453A;--orange:#FF9F0A;
   --purple:#BF5AF2;--teal:#5AC8FA;--gold:#FFD60A;
-  --yellow:#FFE600;--yellow-dim:rgba(255,230,0,0.15);--yellow-border:rgba(255,230,0,0.35);
-  --flex:#FF9F0A;--pe:#32D74B;
-  --r:14px;--rl:20px;
+  --yellow:#FFD60A;--yellow-dim:rgba(255,214,10,0.15);--yellow-border:rgba(255,214,10,0.35);
+  --flex:#FF9F0A;--pe:#30D158;
+  --r:12px;--rl:16px;
   --safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px);
 }
 html{background:var(--bg);}
-body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;max-width:480px;margin:0 auto;position:relative;padding-bottom:calc(80px + var(--safe-bottom));-webkit-font-smoothing:antialiased;overflow-x:hidden;}
+body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;max-width:430px;margin:0 auto;position:relative;padding-bottom:calc(83px + var(--safe-bottom));-webkit-font-smoothing:antialiased;overflow-x:hidden;}
 
 /* ── LOGIN ── */
 #login-screen{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 32px;}
@@ -60,11 +60,11 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .dot.syncing{background:var(--orange);}
 
 /* ── NAV ── */
-.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(0,0,0,0.97);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:0.5px solid var(--border);display:flex;justify-content:space-around;align-items:center;padding:8px 0 calc(12px + var(--safe-bottom));z-index:200;}
-.nav-item{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:4px 12px;border:none;background:none;font-family:inherit;color:var(--text2);transition:color .2s;}
-.nav-item.active{color:var(--yellow);}
-.nav-icon{font-size:20px;line-height:1;}
-.nav-label{font-size:10px;font-weight:500;}
+.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:rgba(28,28,30,0.92);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border-top:0.5px solid var(--border);display:flex;justify-content:space-around;align-items:center;padding:10px 0 calc(14px + var(--safe-bottom));z-index:200;}
+.nav-item{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:4px 16px;border:none;background:none;font-family:inherit;color:var(--text3);transition:color .2s;}
+.nav-item.active{color:var(--blue);}
+.nav-icon{font-size:22px;line-height:1;}
+.nav-label{font-size:10px;font-weight:500;letter-spacing:.1px;}
 
 /* ── PANELS ── */
 #panels-container{position:relative;}
@@ -77,8 +77,8 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 @keyframes slideFromLeft{from{opacity:0;transform:translateX(-40px);}to{opacity:1;transform:translateX(0);}}
 
 /* ── CARDS / UTILS ── */
-.card{background:var(--card);border-radius:var(--r);margin:10px 16px 0;overflow:hidden;border:0.5px solid var(--border);}
-.section-label{font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;padding:14px 16px 4px;}
+.card{background:var(--card);border-radius:var(--r);margin:8px 16px 0;overflow:hidden;}
+.section-label{font-size:13px;font-weight:600;color:var(--text2);padding:20px 20px 6px;letter-spacing:-.1px;}
 .empty-msg{padding:28px 16px;text-align:center;color:var(--text2);font-size:14px;}
 
 /* ── ORDER CARD ── */
@@ -173,9 +173,10 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .logout-btn{width:calc(100% - 32px);margin:0 16px;padding:13px;background:rgba(255,69,58,0.1);border:0.5px solid rgba(255,69,58,0.25);color:var(--red);border-radius:12px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;margin-top:4px;}
 
 /* ── MODAL ── */
-.modal-overlay{display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);align-items:flex-end;justify-content:center;}
-.modal-overlay.visible{display:flex;}
-.modal-sheet{width:100%;max-width:480px;background:#0d1830;border-radius:22px 22px 0 0;padding:16px 20px calc(20px + var(--safe-bottom));border-top:0.5px solid var(--border);max-height:85vh;overflow-y:auto;}
+.modal-overlay{display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.5);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);align-items:flex-end;justify-content:center;}
+.modal-overlay.active{display:flex;animation:modalIn .3s cubic-bezier(0.32,0.72,0,1);}
+.modal-sheet{width:100%;max-width:430px;background:#1c1c1e;border-radius:12px 12px 0 0;padding:8px 0 calc(20px + var(--safe-bottom));max-height:90vh;overflow-y:auto;}
+@keyframes modalIn{from{transform:translateY(100%);}to{transform:translateY(0);}}
 .modal-handle{width:36px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;margin:0 auto 16px;}
 .modal-title{font-size:17px;font-weight:700;margin-bottom:14px;}
 .modal-actions{display:flex;gap:10px;margin-top:14px;}
@@ -475,7 +476,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
     <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Este corte descuenta del stock:</p>
     <div id="stock-changes-list"></div>
     <div class="modal-actions" style="margin-top:16px">
-      <button class="modal-cancel" onclick="document.getElementById('modal-stock-confirm').classList.remove('visible')">Cancelar</button>
+      <button class="modal-cancel" onclick="document.getElementById('modal-stock-confirm').classList.remove('active')">Cancelar</button>
       <button class="modal-ok" onclick="confirmarStockUpdate()">Confirmar</button>
     </div>
   </div>
@@ -724,7 +725,7 @@ function switchPanel(name, btn, direction) {
     const dy = e.changedTouches[0].clientY - sy;
     if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx)) return;
     // Don't swipe when modal is open
-    if (document.querySelector('.modal-overlay.visible')) return;
+    if (document.querySelector('.modal-overlay.active')) return;
     const idx = PANEL_ORDER.indexOf(window._currentPanel);
     if (dx < 0 && idx < PANEL_ORDER.length - 1) {
       switchPanel(PANEL_ORDER[idx + 1], null, 'right');
@@ -1012,9 +1013,17 @@ async function fetchOrdersForAccount(accountId) {
 
       const existing = window._orders.find(o => o.id === String(order.id));
       if (existing) {
-        // Re-normalizar con datos frescos para corregir producto/talle/monto
+        const wasShipped = existing.shipmentStatus === 'shipped';
         const fresh = normalizeOrder(order, shipment, accountId);
         Object.assign(existing, fresh, { prepared: existing.prepared, corteId: existing.corteId });
+        // Notificar entrega
+        if (wasShipped && existing.shipmentStatus === 'delivered') {
+          playAlertSound(false);
+          showToast(`✅ Entregado: ${existing.buyerName} — ${existing.product} T${existing.size}`, 6000);
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('📦 Paquete entregado', { body: `${existing.buyerName} · ${existing.product} Talle ${existing.size}` });
+          }
+        }
         continue;
       }
       const normalized = normalizeOrder(order, shipment, accountId);
@@ -1325,11 +1334,11 @@ function finalizarCorte() {
       <span>${current} <span class="stock-change-arrow">→</span> ${after}</span>
     </div>`;
   }).join('');
-  document.getElementById('modal-stock-confirm').classList.add('visible');
+  document.getElementById('modal-stock-confirm').classList.add('active');
 }
 
 async function confirmarStockUpdate() {
-  document.getElementById('modal-stock-confirm').classList.remove('visible');
+  document.getElementById('modal-stock-confirm').classList.remove('active');
   const orders = window._currentCorte.orders;
   orders.forEach(o => {
     if (!window._stock[o.product]) window._stock[o.product] = {};
@@ -1419,7 +1428,7 @@ async function desconectarCuenta(accountId) {
 // ── SCANNER ──
 async function abrirScanner() {
   const modal = document.getElementById('modal-scan');
-  modal.classList.add('visible');
+  modal.classList.add('active');
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     window._scanStream = stream;
@@ -1428,7 +1437,7 @@ async function abrirScanner() {
     startBarcodeDetection(video);
   } catch(e) {
     showToast('No se pudo acceder a la cámara');
-    modal.classList.remove('visible');
+    modal.classList.remove('active');
   }
 }
 
@@ -1468,7 +1477,7 @@ function processScanResult(code) {
 function cerrarScanner() {
   clearInterval(window._scanInterval);
   if (window._scanStream) { window._scanStream.getTracks().forEach(t => t.stop()); window._scanStream = null; }
-  document.getElementById('modal-scan').classList.remove('visible');
+  document.getElementById('modal-scan').classList.remove('active');
   document.getElementById('scan-result-list').innerHTML = '';
 }
 
