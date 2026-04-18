@@ -296,6 +296,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue'
 
   <div class="section-label">🚚 En camino</div>
   <div class="card" id="en-camino-list"><div class="empty-msg">Sin envíos en camino</div></div>
+
+  <div class="section-label">✅ Entregados (últimas 48hs)</div>
+  <div class="card" id="entregados-list"><div class="empty-msg">Sin entregas recientes</div></div>
 </div>
 
 <!-- ═══════ PANEL CORTE ═══════ -->
@@ -920,62 +923,85 @@ function getFlexCost(locality) {
   return 0;
 }
 
-function extractProduct(title) {
-  const t = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  if (t.includes('media cana')) return 'Media caña Mostaza';
-  if (t.includes('caramelo')) return 'Caramelo';
-  if (t.includes('borcego')) return 'Borcegos';
-  if (t.includes('mostaza')) return 'Mostaza';
-  if (t.includes('total black') || t.includes('totalblack')) return 'Total Black';
-  if (t.includes('black')) return 'Total Black';
-  return title;
-}
+const SKU_MAP = {
+  'TOTAL':     'Total Black',
+  'MEDIAMMOST':'Media caña Mostaza',
+  'MOST':      'Mostaza',
+  'CARAMELO':  'Caramelo',
+  'BORCEGOS':  'Borcegos',
+};
+const COLOR_MAP = {
+  'total black':              'Total Black',
+  'negro y mostaza':          'Media caña Mostaza',
+  'media caña':               'Media caña Mostaza',
+  'media cana':               'Media caña Mostaza',
+  'negro':                    'Mostaza',
+  'mostaza':                  'Mostaza',
+  'caramelo':                 'Caramelo',
+  'borcegos':                 'Borcegos',
+};
 
-function extractSize(item) {
-  // From variation attributes
-  const attrs = item.variation_attributes || [];
-  for (const a of attrs) {
-    if (a.id === 'SHOE_SIZE' || a.name?.toLowerCase().includes('talle') || a.name?.toLowerCase().includes('size')) {
-      return parseInt(a.value_name) || 0;
+function extractProductAndSize(item) {
+  // 1. Intentar por SKU (seller_custom_field)
+  const sku = (item.seller_custom_field || '').toUpperCase();
+  if (sku) {
+    const m = sku.match(/^([A-Z]+)-(\d+)$/);
+    if (m) {
+      const prefix = m[1];
+      const size   = parseInt(m[2]);
+      if (SKU_MAP[prefix]) return { product: SKU_MAP[prefix], size };
     }
   }
-  // From seller_custom_field
-  if (item.seller_custom_field) {
-    const m = item.seller_custom_field.match(/\d+/);
-    if (m) return parseInt(m[0]);
+
+  // 2. Fallback: variation_attributes
+  const attrs = item.item?.variation_attributes || item.variation_attributes || [];
+  let product = '';
+  let size = 0;
+  for (const a of attrs) {
+    const name = (a.name || '').toLowerCase();
+    const val  = (a.value_name || '');
+    if (name.includes('talle') || name.includes('size') || a.id === 'SHOE_SIZE') {
+      size = parseInt(val) || 0;
+    }
+    if (name.includes('color') || a.id === 'COLOR') {
+      const vl = val.toLowerCase();
+      for (const [key, prod] of Object.entries(COLOR_MAP)) {
+        if (vl.includes(key)) { product = prod; break; }
+      }
+    }
   }
-  return 0;
+  if (!product) product = 'Desconocido';
+  return { product, size };
 }
 
 function normalizeOrder(order, shipment, accountId) {
   const item = order.order_items[0];
   const payment = order.payments?.[0] || {};
-  const product = extractProduct(item.item.title);
-  const size = extractSize(item);
+  const { product, size } = extractProductAndSize(item);
 
-  // FLEX: cross_docking = mismo día CABA, fulfillment = depósito MELI
   const logType = shipment?.logistic_type || '';
   const isFlex = logType === 'cross_docking';
+  const deadlineHour = isFlex ? 13 : 14;
 
   const locality = shipment?.receiver_address?.city?.name
     || shipment?.receiver_address?.neighborhood?.name || '';
   const province = shipment?.receiver_address?.state?.name || '';
   const shippingCost = isFlex ? getFlexCost(locality) : 0;
 
-  // net_received_amount es lo que acredita MELI (ya descontó comisión e IIBB)
-  // Si es 0 o null, el pago aún no se acreditó — usamos total_paid_amount como referencia
-  const netMeli = payment.net_received_amount > 0
+  const amount = payment.net_received_amount > 0
     ? payment.net_received_amount
-    : Math.round((payment.total_paid_amount || 0) * 0.82); // ~18% comisión MELI estimada
-  const amount = netMeli;
+    : Math.round((payment.total_paid_amount || 0) * 0.82);
   const netAmount = amount - shippingCost;
   const iibb = payment.taxes_amount || 0;
   const buyerName = `${order.buyer?.first_name || ''} ${order.buyer?.last_name || ''}`.trim() || order.buyer?.nickname || 'Comprador';
+  const estimatedDelivery = shipment?.estimated_delivery_time?.date
+    || shipment?.estimated_delivery_limit?.date || null;
   return {
     id: String(order.id),
     accountId,
     buyerName,
     province,
+    locality,
     iibb,
     product,
     size,
@@ -983,13 +1009,16 @@ function normalizeOrder(order, shipment, accountId) {
     shippingCost,
     netAmount,
     isFlex,
-    locality,
+    deadlineHour,
     shipmentId: String(order.shipping?.id || ''),
     shipmentStatus: shipment?.status || 'ready_to_ship',
+    estimatedDelivery,
     prepared: false,
+    stockDiscounted: false,
     corteId: null,
     dateCreated: order.date_created,
-    title: item.item.title
+    sku: item.seller_custom_field || '',
+    title: item.item?.title || '',
   };
 }
 
@@ -1074,14 +1103,18 @@ function getCountdown(targetHour) {
 }
 
 function renderDashboard() {
-  const enDeposito = window._orders.filter(o => !o.corteId && !['shipped','delivered','not_delivered','cancelled'].includes(o.shipmentStatus));
-  const enCamino   = window._orders.filter(o => ['shipped'].includes(o.shipmentStatus));
-  const porPreparar = enDeposito.filter(o => !o.prepared).sort((a,b) => a.dateCreated > b.dateCreated ? 1 : -1);
-  const preparados  = enDeposito.filter(o => o.prepared).sort((a,b) => a.dateCreated > b.dateCreated ? 1 : -1);
+  const activos    = window._orders.filter(o => o.shipmentStatus !== 'cancelled');
+  const enDeposito = activos.filter(o => !['shipped','delivered','not_delivered'].includes(o.shipmentStatus));
+  const porPreparar = enDeposito.filter(o => !o.prepared).sort((a,b) => a.isFlex === b.isFlex ? 0 : a.isFlex ? -1 : 1);
+  const listosDespach = enDeposito.filter(o => o.prepared).sort((a,b) => a.isFlex === b.isFlex ? 0 : a.isFlex ? -1 : 1);
+  const enCamino   = activos.filter(o => o.shipmentStatus === 'shipped');
+  const entregados = activos.filter(o => o.shipmentStatus === 'delivered');
   renderPickingList(porPreparar);
-  renderOrderCards('por-preparar-list', porPreparar);
-  renderOrderCards('preparados-list', preparados);
-  renderEnCaminoList('en-camino-list', enCamino);
+  renderPorPreparar(porPreparar);
+  renderPreparados(listosDespach);
+  renderEnCamino(enCamino);
+  renderEntregados(entregados);
+  updateCortePendingCount();
 }
 
 function renderPickingList(pending) {
@@ -1113,43 +1146,69 @@ function renderPickingList(pending) {
   </div>`;
 }
 
-function renderOrderCards(containerId, orders) {
-  const el = document.getElementById(containerId);
+function orderCard(o, showPrepBtn = false) {
+  const badge = o.isFlex
+    ? `<span class="order-badge badge-flex">⚡ FLEX · hasta 13:00</span>`
+    : `<span class="order-badge badge-pe">📦 PE · hasta 14:00</span>`;
+  const chip = `<span class="account-chip ${o.accountId==='capi'?'chip-capi':'chip-enano'}">${o.accountId}</span>`;
+  const prepBtn = showPrepBtn
+    ? `<button class="prep-btn" onclick="togglePrep('${o.id}',event)">Marcar preparado</button>`
+    : `<button class="prep-btn done" onclick="togglePrep('${o.id}',event)">✓ Listo</button>`;
+  return `<div class="order-card" onclick="abrirDetalle('${o.id}')">
+    <div class="order-top">${badge}${chip}</div>
+    <div class="order-buyer">${escHtml(o.buyerName)}</div>
+    <div class="order-product">${escHtml(o.product)} · Talle ${o.size}</div>
+    <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
+    <div class="order-footer">
+      <span class="order-amount">$${fmt(o.netAmount)}</span>
+      ${prepBtn}
+    </div>
+  </div>`;
+}
+
+function renderPorPreparar(orders) {
+  const el = document.getElementById('por-preparar-list');
+  if (!orders.length) { el.innerHTML = '<div class="empty-msg">Sin órdenes pendientes</div>'; return; }
+  el.innerHTML = orders.map(o => orderCard(o, true)).join('');
+}
+
+function renderPreparados(orders) {
+  const el = document.getElementById('preparados-list');
   if (!orders.length) { el.innerHTML = '<div class="empty-msg">—</div>'; return; }
+  el.innerHTML = orders.map(o => orderCard(o, false)).join('');
+}
+
+function renderEnCamino(orders) {
+  const el = document.getElementById('en-camino-list');
+  if (!orders.length) { el.innerHTML = '<div class="empty-msg">Sin envíos en camino</div>'; return; }
   el.innerHTML = orders.map(o => {
-    const badge = o.isFlex ? `<span class="order-badge badge-flex">⚡ FLEX</span>` : `<span class="order-badge badge-pe">📦 PE</span>`;
-    const prepBtn = o.prepared
-      ? `<button class="prep-btn done" onclick="togglePrep('${o.id}',event)">✓ Preparado</button>`
-      : `<button class="prep-btn" onclick="togglePrep('${o.id}',event)">Marcar listo</button>`;
-    return `<div class="order-card" id="oc-${o.id}" onclick="abrirDetalle('${o.id}')">
+    const eta = o.estimatedDelivery
+      ? `Entrega est. ${new Date(o.estimatedDelivery).toLocaleDateString('es-AR',{day:'numeric',month:'short'})}`
+      : '';
+    return `<div class="order-card" onclick="abrirDetalle('${o.id}')">
       <div class="order-top">
-        ${badge}
-        <span class="order-id">#${o.id.slice(-6)}</span>
+        <span class="order-badge" style="background:rgba(48,209,88,0.12);color:var(--green)">🚚 En camino</span>
         <span class="account-chip ${o.accountId==='capi'?'chip-capi':'chip-enano'}">${o.accountId}</span>
       </div>
       <div class="order-buyer">${escHtml(o.buyerName)}</div>
       <div class="order-product">${escHtml(o.product)} · Talle ${o.size}</div>
-      <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
-      <div class="order-footer">
-        <span class="order-amount">$${fmt(o.netAmount)}</span>
-        ${prepBtn}
-      </div>
+      ${eta ? `<div class="order-locality" style="color:var(--green)">${eta}</div>` : ''}
     </div>`;
   }).join('');
 }
 
-function renderEnCaminoList(containerId, orders) {
-  const el = document.getElementById(containerId);
-  if (!orders.length) { el.innerHTML = '<div class="empty-msg">—</div>'; return; }
+function renderEntregados(orders) {
+  const el = document.getElementById('entregados-list');
+  if (!el) return;
+  if (!orders.length) { el.innerHTML = '<div class="empty-msg">Sin entregas recientes</div>'; return; }
   el.innerHTML = orders.map(o => `
-    <div class="order-card" onclick="abrirDetalle('${o.id}')">
+    <div class="order-card">
       <div class="order-top">
-        <span class="order-badge" style="background:rgba(48,209,88,0.15);color:#30d158">🚚 En camino</span>
+        <span class="order-badge" style="background:rgba(48,209,88,0.12);color:var(--green)">✅ Entregado</span>
         <span class="account-chip ${o.accountId==='capi'?'chip-capi':'chip-enano'}">${o.accountId}</span>
       </div>
       <div class="order-buyer">${escHtml(o.buyerName)}</div>
       <div class="order-product">${escHtml(o.product)} · Talle ${o.size}</div>
-      <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
     </div>`).join('');
 }
 
@@ -1198,15 +1257,30 @@ function togglePrep(orderId, evt) {
   const o = window._orders.find(x => x.id === orderId);
   if (!o) return;
   o.prepared = !o.prepared;
+  // Descontar stock al preparar, reponer si se desmarca
+  if (o.prepared && !o.stockDiscounted) {
+    if (!window._stock[o.product]) window._stock[o.product] = {};
+    window._stock[o.product][o.size] = Math.max(0, (window._stock[o.product][o.size] || 0) - 1);
+    o.stockDiscounted = true;
+    saveStock();
+  } else if (!o.prepared && o.stockDiscounted) {
+    if (!window._stock[o.product]) window._stock[o.product] = {};
+    window._stock[o.product][o.size] = (window._stock[o.product][o.size] || 0) + 1;
+    o.stockDiscounted = false;
+    saveStock();
+  }
   saveOrders();
   renderDashboard();
+  renderStock();
 }
 
 // ── CORTE ──
 function updateCortePendingCount() {
-  const listos = window._orders.filter(o => !o.corteId && o.prepared);
+  const pendientes = window._orders.filter(o => !o.corteId && o.shipmentStatus !== 'cancelled');
   const el = document.getElementById('corte-pending-count');
-  if (el) el.textContent = listos.length > 0 ? `${listos.length} venta${listos.length>1?'s':''} preparada${listos.length>1?'s':''} para cortar` : 'Preparar órdenes para hacer el corte';
+  if (el) el.textContent = pendientes.length > 0
+    ? `${pendientes.length} venta${pendientes.length>1?'s':''} para incluir en el corte`
+    : 'No hay ventas nuevas para cortar';
 }
 
 function fmt(n) {
@@ -1222,7 +1296,7 @@ function escHtml(s) {
 }
 
 function makeCorte() {
-  const pending = window._orders.filter(o => !o.corteId);
+  const pending = window._orders.filter(o => !o.corteId && o.shipmentStatus !== 'cancelled');
   if (!pending.length) { showToast('No hay ventas nuevas para cortar'); return; }
   const corteId = Date.now().toString();
   pending.forEach(o => o.corteId = corteId);
@@ -1316,50 +1390,30 @@ function resetCorteView() {
 // ── FINALIZAR CORTE ──
 function finalizarCorte() {
   if (!window._currentCorte) return;
-  const orders = window._currentCorte.orders;
-  // Calculate stock changes
-  const changes = {};
-  orders.forEach(o => {
-    const key = `${o.product}|${o.size}`;
-    changes[key] = (changes[key] || 0) + 1;
-  });
-  // Show confirmation modal
-  const list = document.getElementById('stock-changes-list');
-  list.innerHTML = Object.entries(changes).map(([key, qty]) => {
-    const [prod, size] = key.split('|');
-    const current = (window._stock[prod] || {})[parseInt(size)] || 0;
-    const after = Math.max(0, current - qty);
-    return `<div class="stock-change-item">
-      <span>${prod} ${size}</span>
-      <span>${current} <span class="stock-change-arrow">→</span> ${after}</span>
-    </div>`;
-  }).join('');
-  document.getElementById('modal-stock-confirm').classList.add('active');
-}
-
-async function confirmarStockUpdate() {
-  document.getElementById('modal-stock-confirm').classList.remove('active');
-  const orders = window._currentCorte.orders;
-  orders.forEach(o => {
-    if (!window._stock[o.product]) window._stock[o.product] = {};
-    const current = window._stock[o.product][o.size] || 0;
-    window._stock[o.product][o.size] = Math.max(0, current - 1);
-  });
-  await saveStock();
-  renderStock();
+  saveOrders();
   resetCorteView();
-  showToast('✅ Stock actualizado');
+  showToast('✅ Corte finalizado');
   renderDashboard();
   updateCortePendingCount();
 }
 
+async function confirmarStockUpdate() {
+  document.getElementById('modal-stock-confirm').classList.remove('active');
+}
+
 // ── STOCK ──
+const STOCK_DEFAULT = {
+  'Total Black':        {38:0,39:0,40:0,41:0,42:0,43:1,44:4,45:0},
+  'Mostaza':            {38:4,39:8,40:12,41:16,42:11,43:12,44:8,45:3},
+  'Media caña Mostaza': {38:0,39:0,40:0,41:0,42:0,43:0,44:0,45:0},
+  'Caramelo':           {38:0,39:0,40:0,41:0,42:0,43:0,44:0,45:0},
+  'Borcegos':           {38:0,39:0,40:0,41:0,42:0,43:0,44:0,45:0},
+};
+
 async function loadStock() {
   const data = await window._fbLoad('state/stock');
   if (data?.v) { window._stock = JSON.parse(data.v); }
-  else {
-    PRODUCTOS.forEach(p => { window._stock[p] = {}; TALLES.forEach(t => window._stock[p][t] = 0); });
-  }
+  else { window._stock = JSON.parse(JSON.stringify(STOCK_DEFAULT)); }
 }
 async function saveStock() {
   await window._fbSave('state/stock', { v: JSON.stringify(window._stock) });
