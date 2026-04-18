@@ -283,14 +283,17 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
     <button class="refresh-btn" onclick="fetchAllOrders()">🔄 Actualizar</button>
   </div>
 
-  <div class="section-label">⚡ FLEX <span style="font-size:10px;color:var(--orange)">— tope 13:00</span></div>
-  <div class="card" id="flex-list"><div class="empty-msg">Sin órdenes FLEX pendientes</div></div>
-
-  <div class="section-label">📦 Punto de Envío <span style="font-size:10px;color:var(--green)">— tope 14:00</span></div>
-  <div class="card" id="pe-list"><div class="empty-msg">Sin órdenes Punto de Envío</div></div>
-
-  <div class="section-label">🗃️ Para preparar del depósito</div>
+  <div class="section-label">🗃️ Consolidado depósito</div>
   <div class="card" id="picking-list"><div class="empty-msg">Sin pedidos pendientes</div></div>
+
+  <div class="section-label">⏳ Por preparar</div>
+  <div class="card" id="por-preparar-list"><div class="empty-msg">Sin órdenes para preparar</div></div>
+
+  <div class="section-label">✅ Preparados — listos para despachar</div>
+  <div class="card" id="preparados-list"><div class="empty-msg">Sin órdenes preparadas</div></div>
+
+  <div class="section-label">🚚 En camino</div>
+  <div class="card" id="en-camino-list"><div class="empty-msg">Sin envíos en camino</div></div>
 </div>
 
 <!-- ═══════ PANEL CORTE ═══════ -->
@@ -433,6 +436,19 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
     <span class="nav-label">Config</span>
   </button>
 </nav>
+
+<!-- ─── MODAL DETALLE ORDEN ─── -->
+<div class="modal-overlay" id="modal-order-detail">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="detail-title">Detalle de orden</div>
+    <div id="detail-body" style="font-size:14px;color:var(--text2);line-height:1.7"></div>
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="modal-cancel" onclick="cerrarDetalle()">Cerrar</button>
+      <button id="detail-prep-btn" class="scan-btn" style="flex:1" onclick="togglePrepDesdeDetalle()"></button>
+    </div>
+  </div>
+</div>
 
 <!-- ─── MODAL SCAN ─── -->
 <div class="modal-overlay" id="modal-scan">
@@ -895,12 +911,13 @@ function getFlexCost(locality) {
 }
 
 function extractProduct(title) {
-  const t = title.toLowerCase();
-  if (t.includes('media caña') || t.includes('media cana')) return 'Media caña Mostaza';
-  if (t.includes('borcego')) return 'Borcegos';
+  const t = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  if (t.includes('media cana') || t.includes('media cana') || (t.includes('cana') && t.includes('mostaza'))) return 'Media caña Mostaza';
+  if (t.includes('borcego') || t.includes('botita') || t.includes('bota')) return 'Borcegos';
   if (t.includes('caramelo')) return 'Caramelo';
   if (t.includes('mostaza')) return 'Mostaza';
-  if (t.includes('total black') || t.includes('black')) return 'Total Black';
+  if (t.includes('total black') || t.includes('totalblack')) return 'Total Black';
+  if (t.includes('black')) return 'Total Black';
   return title;
 }
 
@@ -947,6 +964,7 @@ function normalizeOrder(order, shipment, accountId) {
     isFlex,
     locality,
     shipmentId: String(order.shipping?.id || ''),
+    shipmentStatus: shipment?.status || 'ready_to_ship',
     prepared: false,
     corteId: null,
     dateCreated: order.date_created,
@@ -962,9 +980,14 @@ async function fetchOrdersForAccount(accountId) {
     const data = await meliAPI(`/orders/search?seller=${acc.sellerId}&order.status=paid&sort=date_desc&offset=0&limit=50`, accountId);
     const added = [];
     for (const order of (data.results || [])) {
-      if (window._orders.find(o => o.id === String(order.id))) continue;
+      const existing = window._orders.find(o => o.id === String(order.id));
       let shipment = null;
-      try { shipment = await meliAPI(`/shipments/${order.shipping?.id}`, accountId); } catch {}
+      try { if (order.shipping?.id) shipment = await meliAPI(`/shipments/${order.shipping.id}`, accountId); } catch {}
+      if (existing) {
+        // Actualizar estado de envío
+        if (shipment?.status) existing.shipmentStatus = shipment.status;
+        continue;
+      }
       const normalized = normalizeOrder(order, shipment, accountId);
       window._orders.push(normalized);
       added.push(normalized);
@@ -1008,12 +1031,14 @@ function getCountdown(targetHour) {
 }
 
 function renderDashboard() {
-  const pending = window._orders.filter(o => !o.corteId);
-  const flex = pending.filter(o => o.isFlex).sort((a,b) => a.dateCreated > b.dateCreated ? 1 : -1);
-  const pe   = pending.filter(o => !o.isFlex).sort((a,b) => a.dateCreated > b.dateCreated ? 1 : -1);
-  renderOrderList('flex-list', flex, 13);
-  renderOrderList('pe-list', pe, 14);
-  renderPickingList(pending);
+  const enDeposito = window._orders.filter(o => !o.corteId && !['shipped','delivered','not_delivered','cancelled'].includes(o.shipmentStatus));
+  const enCamino   = window._orders.filter(o => ['shipped'].includes(o.shipmentStatus));
+  const porPreparar = enDeposito.filter(o => !o.prepared).sort((a,b) => a.dateCreated > b.dateCreated ? 1 : -1);
+  const preparados  = enDeposito.filter(o => o.prepared).sort((a,b) => a.dateCreated > b.dateCreated ? 1 : -1);
+  renderPickingList(porPreparar);
+  renderOrderCards('por-preparar-list', porPreparar);
+  renderOrderCards('preparados-list', preparados);
+  renderEnCaminoList('en-camino-list', enCamino);
 }
 
 function renderPickingList(pending) {
@@ -1045,55 +1070,100 @@ function renderPickingList(pending) {
   </div>`;
 }
 
-function renderOrderList(containerId, orders, cutoffHour) {
+function renderOrderCards(containerId, orders) {
   const el = document.getElementById(containerId);
-  if (!orders.length) { el.innerHTML = '<div class="empty-msg">Sin órdenes pendientes</div>'; return; }
-  const { text: ctext, cls: ccls } = getCountdown(cutoffHour);
+  if (!orders.length) { el.innerHTML = '<div class="empty-msg">—</div>'; return; }
   el.innerHTML = orders.map(o => {
-    const isFlex = o.isFlex;
-    const badge = isFlex ? `<span class="order-badge badge-flex">⚡ FLEX</span>` : `<span class="order-badge badge-pe">📦 PE</span>`;
-    const amountLine = isFlex && o.shippingCost > 0
-      ? `<div class="order-amount">$${fmt(o.netAmount)} <span class="order-amount-detail" style="font-size:11px">($${fmt(o.amount)} − $${fmt(o.shippingCost)} flex)</span></div>`
-      : `<div class="order-amount">$${fmt(o.amount)}</div>`;
+    const badge = o.isFlex ? `<span class="order-badge badge-flex">⚡ FLEX</span>` : `<span class="order-badge badge-pe">📦 PE</span>`;
     const prepBtn = o.prepared
-      ? `<span class="order-badge badge-prepared">✓ Preparado</span>`
-      : `<button class="prep-btn" onclick="togglePrep('${o.id}',this)">Preparar</button>`;
-    return `<div class="order-card" id="oc-${o.id}">
+      ? `<button class="prep-btn done" onclick="togglePrep('${o.id}',event)">✓ Preparado</button>`
+      : `<button class="prep-btn" onclick="togglePrep('${o.id}',event)">Marcar listo</button>`;
+    return `<div class="order-card" id="oc-${o.id}" onclick="abrirDetalle('${o.id}')">
       <div class="order-top">
         ${badge}
-        <span class="order-countdown ${ccls}">${ctext}</span>
-        <span class="order-id">#${o.id.slice(-8)}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div>
-          <div class="order-buyer">${escHtml(o.buyerName)}</div>
-          <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
-          <div class="order-product">${escHtml(o.product)} · Talle ${o.size}</div>
-        </div>
-        ${amountLine}
-      </div>
-      <div class="order-footer">
+        <span class="order-id">#${o.id.slice(-6)}</span>
         <span class="account-chip ${o.accountId==='capi'?'chip-capi':'chip-enano'}">${o.accountId}</span>
+      </div>
+      <div class="order-buyer">${escHtml(o.buyerName)}</div>
+      <div class="order-product">${escHtml(o.product)} · Talle ${o.size}</div>
+      <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
+      <div class="order-footer">
+        <span class="order-amount">$${fmt(o.netAmount)}</span>
         ${prepBtn}
       </div>
     </div>`;
   }).join('');
 }
 
-function togglePrep(orderId, btn) {
-  const order = window._orders.find(o => o.id === orderId);
-  if (!order) return;
-  order.prepared = !order.prepared;
-  if (order.prepared) { btn.textContent = '✓ Listo'; btn.className = 'prep-btn done'; }
-  else { btn.textContent = 'Preparar'; btn.className = 'prep-btn'; }
+function renderEnCaminoList(containerId, orders) {
+  const el = document.getElementById(containerId);
+  if (!orders.length) { el.innerHTML = '<div class="empty-msg">—</div>'; return; }
+  el.innerHTML = orders.map(o => `
+    <div class="order-card" onclick="abrirDetalle('${o.id}')">
+      <div class="order-top">
+        <span class="order-badge" style="background:rgba(48,209,88,0.15);color:#30d158">🚚 En camino</span>
+        <span class="account-chip ${o.accountId==='capi'?'chip-capi':'chip-enano'}">${o.accountId}</span>
+      </div>
+      <div class="order-buyer">${escHtml(o.buyerName)}</div>
+      <div class="order-product">${escHtml(o.product)} · Talle ${o.size}</div>
+      <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
+    </div>`).join('');
+}
+
+window._detailOrderId = null;
+function abrirDetalle(orderId) {
+  const o = window._orders.find(x => x.id === orderId);
+  if (!o) return;
+  window._detailOrderId = orderId;
+  const amountDetail = o.isFlex && o.shippingCost > 0
+    ? `$${fmt(o.amount)} − $${fmt(o.shippingCost)} FLEX = <b>$${fmt(o.netAmount)}</b>`
+    : `<b>$${fmt(o.amount)}</b>`;
+  document.getElementById('detail-title').textContent = `${o.product} · Talle ${o.size}`;
+  document.getElementById('detail-body').innerHTML = `
+    <div style="margin-bottom:8px"><b>Comprador:</b> ${escHtml(o.buyerName)}</div>
+    <div style="margin-bottom:8px"><b>Zona:</b> ${escHtml(o.locality || o.province || '—')}</div>
+    <div style="margin-bottom:8px"><b>Envío:</b> ${o.isFlex ? '⚡ FLEX' : '📦 Punto de Envío'}</div>
+    <div style="margin-bottom:8px"><b>Monto:</b> ${amountDetail}</div>
+    <div style="margin-bottom:8px"><b>Cuenta:</b> ${o.accountId}</div>
+    <div style="margin-bottom:8px"><b>Orden MELI:</b> #${o.id}</div>
+    <div style="margin-bottom:8px"><b>Fecha:</b> ${new Date(o.dateCreated).toLocaleString('es-AR')}</div>
+    <div><b>Estado envío:</b> ${o.shipmentStatus || '—'}</div>
+  `;
+  const btn = document.getElementById('detail-prep-btn');
+  btn.textContent = o.prepared ? '↩ Marcar como no preparado' : '✓ Marcar como preparado';
+  btn.style.background = o.prepared ? 'rgba(255,69,58,0.15)' : 'rgba(48,209,88,0.15)';
+  btn.style.color = o.prepared ? '#ff453a' : '#30d158';
+  document.getElementById('modal-order-detail').classList.add('active');
+}
+
+function cerrarDetalle() {
+  document.getElementById('modal-order-detail').classList.remove('active');
+  window._detailOrderId = null;
+}
+
+function togglePrepDesdeDetalle() {
+  const o = window._orders.find(x => x.id === window._detailOrderId);
+  if (!o) return;
+  o.prepared = !o.prepared;
   saveOrders();
+  cerrarDetalle();
+  renderDashboard();
+}
+
+function togglePrep(orderId, evt) {
+  if (evt) evt.stopPropagation();
+  const o = window._orders.find(x => x.id === orderId);
+  if (!o) return;
+  o.prepared = !o.prepared;
+  saveOrders();
+  renderDashboard();
 }
 
 // ── CORTE ──
 function updateCortePendingCount() {
-  const pending = window._orders.filter(o => !o.corteId);
+  const listos = window._orders.filter(o => !o.corteId && o.prepared);
   const el = document.getElementById('corte-pending-count');
-  if (el) el.textContent = pending.length > 0 ? `${pending.length} venta${pending.length>1?'s':''} listas para cortar` : 'No hay ventas nuevas aún';
+  if (el) el.textContent = listos.length > 0 ? `${listos.length} venta${listos.length>1?'s':''} preparada${listos.length>1?'s':''} para cortar` : 'Preparar órdenes para hacer el corte';
 }
 
 function fmt(n) {
