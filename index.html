@@ -964,20 +964,41 @@ function extractProductAndSize(item) {
       size = parseInt(val) || 0;
     }
     if (name.includes('color') || a.id === 'COLOR') {
-      const vl = val.toLowerCase();
+      const vl = val.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
       for (const [key, prod] of Object.entries(COLOR_MAP)) {
-        if (vl.includes(key)) { product = prod; break; }
+        const kn = key.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+        if (vl.includes(kn)) { product = prod; break; }
       }
     }
   }
-  if (!product) product = 'Desconocido';
+
+  // 3. Fallback: parsear desde el título
+  if (!product) {
+    const t = (item.item?.title || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    if (t.includes('total black'))   product = 'Total Black';
+    else if (t.includes('media cana')) product = 'Media caña Mostaza';
+    else if (t.includes('caramelo')) product = 'Caramelo';
+    else if (t.includes('borcego'))  product = 'Borcegos';
+    else if (t.includes('negro') || t.includes('mostaza')) product = 'Mostaza';
+    // Talle desde título como último recurso
+    if (!size) {
+      const tm = t.match(/\b(3[89]|4[0-5])\b/);
+      if (tm) size = parseInt(tm[1]);
+    }
+  }
+
+  if (!product) product = item.item?.title || 'Sin identificar';
   return { product, size };
 }
 
 function normalizeOrder(order, shipment, accountId) {
   const payment = order.payments?.[0] || {};
-  const logType = shipment?.logistic_type || '';
-  const isFlex  = logType === 'cross_docking';
+  const logType  = shipment?.logistic_type || '';
+  const shipMode = shipment?.mode || '';
+  // En Argentina MELI FLEX usa: cross_docking, xd_drop_off, me1, o tiene conductor (mode me1)
+  const FLEX_LOG_TYPES = ['cross_docking', 'xd_drop_off', 'me1'];
+  const isFlex = FLEX_LOG_TYPES.includes(logType) || shipMode === 'me1'
+    || (shipment?.shipping_option?.name || '').toLowerCase().includes('flex');
   const locality = shipment?.receiver_address?.city?.name
     || shipment?.receiver_address?.neighborhood?.name || '';
   const province = shipment?.receiver_address?.state?.name || '';
