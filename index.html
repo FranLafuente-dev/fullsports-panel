@@ -1004,9 +1004,11 @@ function normalizeOrder(order, shipment, accountId) {
 
   // PE: net_received_amount ya tiene el envío descontado por MELI
   // FLEX: net_received_amount NO tiene el envío descontado, lo restamos nosotros
-  const netMeli = payment.net_received_amount > 0
-    ? payment.net_received_amount
-    : Math.round((payment.total_paid_amount || 0) * 0.82);
+  const rawNet = Number(payment.net_received_amount);
+  const rawTotal = Number(payment.total_paid_amount);
+  const netMeli = (isFinite(rawNet) && rawNet > 0)
+    ? rawNet
+    : (isFinite(rawTotal) && rawTotal > 0 ? Math.round(rawTotal * 0.82) : 0);
   const netAmount = netMeli - flexCost;
 
   const iibb = payment.taxes_amount || 0;
@@ -1199,11 +1201,12 @@ function orderCard(o, showPrepBtn = false) {
   const amountLine = o.isFlex && o.flexCost > 0
     ? `$${fmt(o.netMeli)} − $${fmt(o.flexCost)} FLEX = <b>$${fmt(o.netAmount)}</b>`
     : `$${fmt(o.netAmount)}`;
+  const etaText = fmtEta(o.estimatedDelivery);
   return `<div class="order-card" onclick="abrirDetalle('${o.id}')">
     <div class="order-top">${badge}${chip}</div>
     <div class="order-buyer">${escHtml(o.buyerName)}</div>
     ${itemsHtml}
-    <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
+    <div class="order-locality">${escHtml(o.locality || o.province || '')}${etaText ? ` · <span style="color:var(--green)">${etaText}</span>` : ''}</div>
     <div class="order-footer">
       <span class="order-amount" style="font-size:13px">${amountLine}</span>
       ${prepBtn}
@@ -1333,7 +1336,20 @@ function updateCortePendingCount() {
 }
 
 function fmt(n) {
-  return Math.round(n).toLocaleString('es-AR');
+  const v = Number(n);
+  return isFinite(v) ? Math.round(v).toLocaleString('es-AR') : '—';
+}
+
+function fmtEta(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diff = Math.round((target - today) / 86400000);
+  if (diff === 0) return 'Entrega: hoy';
+  if (diff === 1) return 'Entrega: mañana';
+  return 'Entrega: ' + d.toLocaleDateString('es-AR', { weekday:'short', day:'numeric', month:'short' });
 }
 
 function fmtIIBB(n) {
