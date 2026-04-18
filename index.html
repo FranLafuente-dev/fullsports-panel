@@ -1015,7 +1015,10 @@ function normalizeOrder(order, shipment, accountId) {
   const buyerName = `${order.buyer?.first_name || ''} ${order.buyer?.last_name || ''}`.trim()
     || order.buyer?.nickname || 'Comprador';
   const estimatedDelivery = shipment?.estimated_delivery_time?.date
-    || shipment?.estimated_delivery_limit?.date || null;
+    || shipment?.estimated_delivery_limit?.date
+    || shipment?.estimated_delivery_final?.date
+    || shipment?.lead_time?.estimated_delivery_time?.date
+    || null;
 
   // Un entry por ítem de la orden
   const items = (order.order_items || []).map(it => {
@@ -1209,7 +1212,8 @@ function orderCard(o, showPrepBtn = false) {
     <div class="order-top">${badge}${chip}</div>
     <div class="order-buyer">${escHtml(o.buyerName)}</div>
     ${itemsHtml}
-    <div class="order-locality">${escHtml(o.locality || o.province || '')}${etaText ? ` · <span style="color:var(--green)">${etaText}</span>` : ''}</div>
+    <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
+    <div style="font-size:13px;color:var(--green);margin:2px 0 6px">📅 ${etaText || 'Sin fecha estimada'}</div>
     <div class="order-footer">
       <span class="order-amount" style="font-size:13px">${amountLine}</span>
       ${prepBtn}
@@ -1243,7 +1247,8 @@ function renderPreparados(orders) {
       <div class="order-top">${badge}${chip}</div>
       <div class="order-buyer">${escHtml(o.buyerName)}</div>
       ${itemsHtml}
-      <div class="order-locality">${escHtml(o.locality || o.province || '')}${etaText ? ` · <span style="color:var(--green)">${etaText}</span>` : ''}</div>
+      <div class="order-locality">${escHtml(o.locality || o.province || '')}</div>
+      <div style="font-size:13px;color:var(--green);margin:2px 0 6px">📅 ${etaText || 'Sin fecha estimada'}</div>
       <div class="order-footer">
         <span class="order-amount" style="font-size:13px">${amountLine}</span>
         <button class="prep-btn" style="background:rgba(48,209,88,0.18);color:var(--green);border:1px solid var(--green)" onclick="dispatchOrder('${o.id}',event)">🚚 Despachar</button>
