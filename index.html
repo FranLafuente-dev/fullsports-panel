@@ -281,6 +281,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
   <div class="refresh-row">
     <button class="refresh-btn" onclick="abrirScanner()" style="color:var(--purple);border-color:rgba(191,90,242,0.3)">📷 Escanear</button>
     <button class="refresh-btn" onclick="fetchAllOrders()">🔄 Actualizar</button>
+    <button class="refresh-btn" style="color:#ff453a;border-color:rgba(255,69,58,0.3)" onclick="resetearDatos()">🗑 Resetear</button>
   </div>
 
   <div class="section-label">🗃️ Consolidado depósito</div>
@@ -896,6 +897,14 @@ async function saveOrders() {
   await window._fbSave('state/orders', { v: JSON.stringify(window._orders) });
 }
 
+async function resetearDatos() {
+  if (!confirm('¿Borrar todos los datos locales y resincronizar desde MELI?')) return;
+  window._orders = [];
+  await window._fbSave('state/orders', { v: '[]' });
+  showToast('Datos borrados, sincronizando...');
+  await fetchAllOrders();
+}
+
 function getFlexCost(locality) {
   if (!locality) return 0;
   // Normalize: remove accents, lowercase
@@ -912,9 +921,9 @@ function getFlexCost(locality) {
 
 function extractProduct(title) {
   const t = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  if (t.includes('media cana') || t.includes('media cana') || (t.includes('cana') && t.includes('mostaza'))) return 'Media caña Mostaza';
-  if (t.includes('borcego') || t.includes('botita') || t.includes('bota')) return 'Borcegos';
+  if (t.includes('media cana')) return 'Media caña Mostaza';
   if (t.includes('caramelo')) return 'Caramelo';
+  if (t.includes('borcego')) return 'Borcegos';
   if (t.includes('mostaza')) return 'Mostaza';
   if (t.includes('total black') || t.includes('totalblack')) return 'Total Black';
   if (t.includes('black')) return 'Total Black';
@@ -942,11 +951,22 @@ function normalizeOrder(order, shipment, accountId) {
   const payment = order.payments?.[0] || {};
   const product = extractProduct(item.item.title);
   const size = extractSize(item);
-  const isFlex = shipment?.logistic_type === 'cross_docking' || shipment?.mode === 'me2';
-  const locality = shipment?.receiver_address?.city?.name || shipment?.receiver_address?.neighborhood?.name || '';
+
+  // FLEX: cross_docking = mismo día CABA, fulfillment = depósito MELI
+  const logType = shipment?.logistic_type || '';
+  const isFlex = logType === 'cross_docking';
+
+  const locality = shipment?.receiver_address?.city?.name
+    || shipment?.receiver_address?.neighborhood?.name || '';
   const province = shipment?.receiver_address?.state?.name || '';
   const shippingCost = isFlex ? getFlexCost(locality) : 0;
-  const amount = payment.net_received_amount || payment.total_paid_amount || 0;
+
+  // net_received_amount es lo que acredita MELI (ya descontó comisión e IIBB)
+  // Si es 0 o null, el pago aún no se acreditó — usamos total_paid_amount como referencia
+  const netMeli = payment.net_received_amount > 0
+    ? payment.net_received_amount
+    : Math.round((payment.total_paid_amount || 0) * 0.82); // ~18% comisión MELI estimada
+  const amount = netMeli;
   const netAmount = amount - shippingCost;
   const iibb = payment.taxes_amount || 0;
   const buyerName = `${order.buyer?.first_name || ''} ${order.buyer?.last_name || ''}`.trim() || order.buyer?.nickname || 'Comprador';
@@ -979,19 +999,33 @@ async function fetchOrdersForAccount(accountId) {
     document.getElementById('dot-' + accountId).className = 'dot syncing';
     const data = await meliAPI(`/orders/search?seller=${acc.sellerId}&order.status=paid&sort=date_desc&offset=0&limit=50`, accountId);
     const added = [];
+    const cutoff48h = Date.now() - 48 * 3600000;
     for (const order of (data.results || [])) {
-      const existing = window._orders.find(o => o.id === String(order.id));
       let shipment = null;
       try { if (order.shipping?.id) shipment = await meliAPI(`/shipments/${order.shipping.id}`, accountId); } catch {}
+
+      const shipStatus = shipment?.status || 'ready_to_ship';
+      const orderDate = new Date(order.date_created).getTime();
+
+      // Ignorar entregados hace más de 48hs
+      if (['delivered','not_delivered','cancelled'].includes(shipStatus) && orderDate < cutoff48h) continue;
+
+      const existing = window._orders.find(o => o.id === String(order.id));
       if (existing) {
-        // Actualizar estado de envío
-        if (shipment?.status) existing.shipmentStatus = shipment.status;
+        // Re-normalizar con datos frescos para corregir producto/talle/monto
+        const fresh = normalizeOrder(order, shipment, accountId);
+        Object.assign(existing, fresh, { prepared: existing.prepared, corteId: existing.corteId });
         continue;
       }
       const normalized = normalizeOrder(order, shipment, accountId);
       window._orders.push(normalized);
       added.push(normalized);
     }
+    // Limpiar órdenes viejas entregadas hace más de 48hs
+    window._orders = window._orders.filter(o =>
+      !['delivered','not_delivered','cancelled'].includes(o.shipmentStatus) ||
+      new Date(o.dateCreated).getTime() > cutoff48h
+    );
     document.getElementById('dot-' + accountId).className = 'dot ok';
     return added;
   } catch(e) {
