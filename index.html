@@ -863,7 +863,8 @@ async function meliAPI(endpoint, accountId) {
   const acc = window._accounts[accountId];
   if (!acc?.accessToken) throw new Error('Cuenta no conectada: ' + accountId);
   if (Date.now() > acc.expiresAt - 300000) await refreshToken(accountId);
-  const resp = await fetch(MELI_API + endpoint, { headers: { Authorization: 'Bearer ' + acc.accessToken } });
+  const proxyUrl = MELI_TOKEN_URL.replace('/api/token', '/api/meli') + endpoint;
+  const resp = await fetch(proxyUrl, { headers: { Authorization: 'Bearer ' + acc.accessToken } });
   if (!resp.ok) throw new Error(`MELI API error ${resp.status}: ${endpoint}`);
   return resp.json();
 }
