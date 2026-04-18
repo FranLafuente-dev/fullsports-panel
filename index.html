@@ -1070,7 +1070,10 @@ async function fetchOrdersForAccount(accountId) {
       if (existing) {
         const wasShipped = shipCategory(existing.shipmentStatus) === 'shipped';
         const fresh = normalizeOrder(order, shipment, accountId);
-        Object.assign(existing, fresh, { prepared: existing.prepared, stockDiscounted: existing.stockDiscounted, corteId: existing.corteId });
+        // Si el usuario ya marcó como despachado manualmente, no retroceder a ready_to_ship
+        const keepStatus = wasShipped && shipCategory(fresh.shipmentStatus) === 'deposito'
+          ? existing.shipmentStatus : fresh.shipmentStatus;
+        Object.assign(existing, fresh, { prepared: existing.prepared, stockDiscounted: existing.stockDiscounted, corteId: existing.corteId, shipmentStatus: keepStatus });
         if (wasShipped && shipCategory(existing.shipmentStatus) === 'delivered') {
           playAlertSound(false);
           showToast(`✅ Entregado: ${existing.buyerName}`, 6000);
@@ -1223,7 +1226,40 @@ function renderPorPreparar(orders) {
 function renderPreparados(orders) {
   const el = document.getElementById('preparados-list');
   if (!orders.length) { el.innerHTML = '<div class="empty-msg">—</div>'; return; }
-  el.innerHTML = orders.map(o => orderCard(o, false)).join('');
+  el.innerHTML = orders.map(o => {
+    const items = o.items || [{ product: o.product, size: o.size }];
+    const itemsHtml = items.map(i =>
+      `<div class="order-product">${escHtml(i.product)} · Talle ${i.size}</div>`
+    ).join('');
+    const chip = `<span class="account-chip ${o.accountId==='capi'?'chip-capi':'chip-enano'}">${o.accountId}</span>`;
+    const badge = o.isFlex
+      ? `<span class="order-badge badge-flex">⚡ FLEX</span>`
+      : `<span class="order-badge badge-pe">📦 PE</span>`;
+    const etaText = fmtEta(o.estimatedDelivery);
+    const amountLine = o.isFlex && o.flexCost > 0
+      ? `$${fmt(o.netMeli)} − $${fmt(o.flexCost)} FLEX = <b>$${fmt(o.netAmount)}</b>`
+      : `$${fmt(o.netAmount)}`;
+    return `<div class="order-card" onclick="abrirDetalle('${o.id}')">
+      <div class="order-top">${badge}${chip}</div>
+      <div class="order-buyer">${escHtml(o.buyerName)}</div>
+      ${itemsHtml}
+      <div class="order-locality">${escHtml(o.locality || o.province || '')}${etaText ? ` · <span style="color:var(--green)">${etaText}</span>` : ''}</div>
+      <div class="order-footer">
+        <span class="order-amount" style="font-size:13px">${amountLine}</span>
+        <button class="prep-btn" style="background:rgba(48,209,88,0.18);color:var(--green);border:1px solid var(--green)" onclick="dispatchOrder('${o.id}',event)">🚚 Despachar</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function dispatchOrder(orderId, evt) {
+  if (evt) evt.stopPropagation();
+  const o = window._orders.find(x => x.id === orderId);
+  if (!o) return;
+  o.shipmentStatus = 'shipped';
+  saveOrders();
+  renderDashboard();
+  showToast('🚚 Marcado como en camino');
 }
 
 function renderEnCamino(orders) {
@@ -1265,10 +1301,13 @@ function abrirDetalle(orderId) {
   const o = window._orders.find(x => x.id === orderId);
   if (!o) return;
   window._detailOrderId = orderId;
-  const amountDetail = o.isFlex && o.shippingCost > 0
-    ? `$${fmt(o.amount)} − $${fmt(o.shippingCost)} FLEX = <b>$${fmt(o.netAmount)}</b>`
-    : `<b>$${fmt(o.amount)}</b>`;
-  document.getElementById('detail-title').textContent = `${o.product} · Talle ${o.size}`;
+  const amountDetail = o.isFlex && o.flexCost > 0
+    ? `$${fmt(o.netMeli)} − $${fmt(o.flexCost)} FLEX = <b>$${fmt(o.netAmount)}</b>`
+    : `<b>$${fmt(o.netAmount)}</b>`;
+  const detailItems = (o.items && o.items.length ? o.items : [{ product: o.product, size: o.size }]);
+  document.getElementById('detail-title').textContent = detailItems.map(i => `${i.product} · T${i.size}`).join(' + ');
+  const etaLine = o.estimatedDelivery
+    ? `<div style="margin-bottom:8px"><b>Entrega estimada:</b> ${fmtEta(o.estimatedDelivery)}</div>` : '';
   document.getElementById('detail-body').innerHTML = `
     <div style="margin-bottom:8px"><b>Comprador:</b> ${escHtml(o.buyerName)}</div>
     <div style="margin-bottom:8px"><b>Zona:</b> ${escHtml(o.locality || o.province || '—')}</div>
@@ -1277,6 +1316,7 @@ function abrirDetalle(orderId) {
     <div style="margin-bottom:8px"><b>Cuenta:</b> ${o.accountId}</div>
     <div style="margin-bottom:8px"><b>Orden MELI:</b> #${o.id}</div>
     <div style="margin-bottom:8px"><b>Fecha:</b> ${new Date(o.dateCreated).toLocaleString('es-AR')}</div>
+    ${etaLine}
     <div><b>Estado envío:</b> ${o.shipmentStatus || '—'}</div>
   `;
   const btn = document.getElementById('detail-prep-btn');
