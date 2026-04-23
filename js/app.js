@@ -1,0 +1,1324 @@
+import { initializeApp }        from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, signInAnonymously, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getFirestore, enableIndexedDbPersistence,
+         collection, doc, setDoc, addDoc, updateDoc, deleteDoc,
+         onSnapshot, serverTimestamp, query, orderBy }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { FIREBASE_CONFIG } from './config.js';
+import { FLEX_ZONES }      from './flex-zones.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIREBASE
+// ─────────────────────────────────────────────────────────────────────────────
+const fbApp = initializeApp(FIREBASE_CONFIG);
+const auth  = getAuth(fbApp);
+const db    = getFirestore(fbApp);
+enableIndexedDbPersistence(db).catch(() => {});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTES
+// ─────────────────────────────────────────────────────────────────────────────
+const PRODUCTOS    = ['Mostaza','Total Black','Media caña','Borcegos','Caramelo'];
+const TALLES       = [38,39,40,41,42,43,44,45];
+const COSTO_COMUN  = 21900;
+const COSTO_ESP    = 22400;
+const TALLES_ESP   = [43,44,45];
+
+const LS_PIN    = 'fs_pin_v1';
+const LS_AUTH   = 'fs_auth_ok';
+const LS_ORDERS = 'fs_orders_v4';
+const LS_STOCK  = 'fs_stock_v2';
+const LS_ZONES  = 'fs_zones_v1';
+
+const H24 = 86400000; // 24 horas en ms
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────────────────────────────────────
+let orders    = [];
+let stock     = {};
+let zones     = [...FLEX_ZONES];
+let formItems = [];
+let formEnvio = null;
+let alertTimers = [];
+let zoneHits  = [];
+
+// form state
+let editingId    = null;
+let curCuenta    = 'capi';
+let curEnvio     = 'FLEX';
+let curProducto  = null;
+let stockAll     = false;
+let multiProd    = null;
+let multiTalle   = null;
+
+// ui state
+let pedidosTab   = 'preparar';
+let corteCuenta  = 'capi';
+let expandZonas  = new Set();
+let expandParts  = new Set();
+let editZonePriceLabel = null;
+let editZoneIdx  = null;
+let deliveryId   = null;
+let deliveryAction = 'edit'; // 'edit' | 'dispatch'
+
+// pin state
+let pinBuffer = '';
+let pinMode   = 'check'; // 'check' | 'setup' | 'confirm'
+let pinFirst  = '';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOM
+// ─────────────────────────────────────────────────────────────────────────────
+const $pin     = document.getElementById('pin-screen');
+const $app     = document.getElementById('app');
+const $offline = document.getElementById('offline-pill');
+const $alert   = document.getElementById('alert-banner');
+const $overlay = document.getElementById('sheet-overlay');
+const $shNueva = document.getElementById('sheet-nueva');
+const $shDeliv = document.getElementById('sheet-delivery');
+const $shZone  = document.getElementById('sheet-edit-zone');
+const $shZoneP = document.getElementById('sheet-edit-precio-zona');
+
+const VIEWS = {
+  pedidos: document.getElementById('view-pedidos'),
+  corte:   document.getElementById('view-corte'),
+  stock:   document.getElementById('view-stock'),
+  config:  document.getElementById('view-config'),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ARRANQUE — PIN primero, luego app
+// ─────────────────────────────────────────────────────────────────────────────
+const yaLogueado = !!localStorage.getItem(LS_AUTH);
+
+if (yaLogueado) {
+  // Sesión activa → app directamente, PIN no requerido
+  $pin.style.display = 'none';
+  $app.style.display = 'flex';
+  loadCache();
+  renderAll();
+  initUI();
+} else {
+  // Mostrar pantalla PIN (setup o verificación)
+  const hasPin = !!localStorage.getItem(LS_PIN);
+  pinMode = hasPin ? 'check' : 'setup';
+  updatePinUI();
+}
+
+// Auth anónima Firebase en background (no bloquea la app)
+signInAnonymously(auth).catch(() => {});
+onAuthStateChanged(auth, user => {
+  if (user && !fsConectado) connectFirestore();
+});
+
+let fsConectado = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SISTEMA PIN
+// ─────────────────────────────────────────────────────────────────────────────
+function updatePinUI() {
+  const hints = {
+    check:   'Ingresá tu PIN',
+    setup:   'Configurá tu PIN de 4 dígitos',
+    confirm: 'Repetí el PIN para confirmar',
+  };
+  const subs = {
+    check:   'Panel de ventas',
+    setup:   'Primera vez — creá tu PIN',
+    confirm: 'Confirmá el PIN',
+  };
+  const hintEl = document.getElementById('pin-hint');
+  const subEl  = document.getElementById('pin-mode-label');
+  if (hintEl) hintEl.textContent = hints[pinMode];
+  if (subEl)  subEl.textContent  = subs[pinMode];
+  pinBuffer = '';
+  updatePinDots();
+}
+
+function updatePinDots() {
+  for (let i = 0; i < 4; i++) {
+    const d = document.getElementById(`pd-${i}`);
+    if (d) d.classList.toggle('filled', i < pinBuffer.length);
+  }
+}
+
+function handlePinKey(val) {
+  if (pinBuffer.length >= 4) return;
+  pinBuffer += val;
+  updatePinDots();
+  if (pinBuffer.length === 4) setTimeout(processPinEntry, 200);
+}
+
+function handlePinDel() {
+  if (!pinBuffer.length) return;
+  pinBuffer = pinBuffer.slice(0, -1);
+  updatePinDots();
+}
+
+function processPinEntry() {
+  if (pinMode === 'setup') {
+    pinFirst  = pinBuffer;
+    pinBuffer = '';
+    pinMode   = 'confirm';
+    updatePinUI();
+    return;
+  }
+  if (pinMode === 'confirm') {
+    if (pinBuffer === pinFirst) {
+      localStorage.setItem(LS_PIN, pinBuffer);
+      localStorage.setItem(LS_AUTH, '1');
+      enterApp();
+    } else {
+      shakePinDots();
+      const h = document.getElementById('pin-hint');
+      if (h) h.textContent = 'Los PINs no coinciden, empezá de nuevo';
+      pinFirst = ''; pinBuffer = ''; pinMode = 'setup';
+      setTimeout(updatePinDots, 400);
+    }
+    return;
+  }
+  // mode === 'check'
+  if (pinBuffer === localStorage.getItem(LS_PIN)) {
+    localStorage.setItem(LS_AUTH, '1');
+    enterApp();
+  } else {
+    shakePinDots();
+    const h = document.getElementById('pin-hint');
+    if (h) h.textContent = 'PIN incorrecto — intentá de nuevo';
+    pinBuffer = '';
+    setTimeout(updatePinDots, 400);
+  }
+}
+
+function shakePinDots() {
+  const dots = document.getElementById('pin-dots');
+  if (!dots) return;
+  dots.classList.add('shake');
+  setTimeout(() => dots.classList.remove('shake'), 500);
+}
+
+function enterApp() {
+  $pin.style.display = 'none';
+  $app.style.display = 'flex';
+  if (!uiOk) { loadCache(); renderAll(); initUI(); }
+}
+
+// Listeners del teclado PIN
+document.querySelectorAll('.pin-key[data-v]').forEach(btn => {
+  btn.addEventListener('click', () => handlePinKey(btn.dataset.v));
+});
+document.getElementById('pin-del')?.addEventListener('click', handlePinDel);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CACHE
+// ─────────────────────────────────────────────────────────────────────────────
+function loadCache() {
+  try { const r = localStorage.getItem(LS_ORDERS); if (r) orders = JSON.parse(r); } catch(e) { orders = []; }
+  try { const r = localStorage.getItem(LS_STOCK);  if (r) stock  = JSON.parse(r); } catch(e) { stock  = {}; }
+  try { const r = localStorage.getItem(LS_ZONES);  if (r) zones  = JSON.parse(r); } catch(e) { zones  = [...FLEX_ZONES]; }
+}
+function saveOrders() { try { localStorage.setItem(LS_ORDERS, JSON.stringify(orders)); } catch(e) {} }
+function saveStock()  { try { localStorage.setItem(LS_STOCK,  JSON.stringify(stock));  } catch(e) {} }
+function saveZones()  { try { localStorage.setItem(LS_ZONES,  JSON.stringify(zones));  } catch(e) {} }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIRESTORE — listeners en tiempo real
+// ─────────────────────────────────────────────────────────────────────────────
+function connectFirestore() {
+  if (fsConectado) return;
+  fsConectado = true;
+
+  onSnapshot(query(collection(db,'orders'), orderBy('createdAt','desc')), snap => {
+    orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    saveOrders();
+    renderPedidos();
+    renderCorte();
+    checkAutoArchiveEnano();
+  }, e => console.warn('orders:', e));
+
+  onSnapshot(doc(db,'meta','stock'), snap => {
+    if (snap.exists()) { stock = snap.data(); saveStock(); renderStock(); }
+  }, e => console.warn('stock:', e));
+
+  onSnapshot(doc(db,'meta','flexZones'), snap => {
+    if (snap.exists()) { zones = snap.data().zones; saveZones(); renderConfig(); }
+  }, e => console.warn('zones:', e));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-ARCHIVADO ENANO — 24h en camino → entregado
+// ─────────────────────────────────────────────────────────────────────────────
+function checkAutoArchiveEnano() {
+  const now = Date.now();
+  const vencidos = orders.filter(o =>
+    o.status === 'camino' &&
+    o.cuenta === 'enano' &&
+    ms(o.despachadoAt) > 0 &&
+    now - ms(o.despachadoAt) >= H24
+  );
+  if (!vencidos.length) return;
+  vencidos.forEach(async o => {
+    const f = new Date().toLocaleDateString('es-AR');
+    mutateOrder(o.id, { status: 'entregado', fechaEntrega: f, deliveredAt: Date.now() });
+    try {
+      await updateDoc(doc(db,'orders',o.id), {
+        status: 'entregado',
+        deliveredAt: serverTimestamp(),
+        fechaEntrega: f,
+      });
+    } catch(e) {}
+  });
+  renderPedidos();
+}
+
+// Revisar cada minuto si hay enanos vencidos
+setInterval(checkAutoArchiveEnano, 60000);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIMESTAMP helper
+// ─────────────────────────────────────────────────────────────────────────────
+function ms(ts) {
+  if (!ts) return 0;
+  if (typeof ts.toMillis === 'function') return ts.toMillis();
+  if (ts._seconds) return ts._seconds * 1000;
+  if (typeof ts === 'number') return ts;
+  return 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI INIT (una sola vez)
+// ─────────────────────────────────────────────────────────────────────────────
+let uiOk = false;
+function initUI() {
+  if (uiOk) return; uiOk = true;
+  setupNav();
+  setupSwipe();
+  setupSheetDrag();
+  setupOffline();
+  setupAlerts();
+  setupLocalidadSearch();
+  setupFormListeners();
+  setupDeliverySheet();
+  requestNotificationPermission();
+  navigateTo('pedidos');
+  // Chequear auto-archivado al abrir
+  setTimeout(checkAutoArchiveEnano, 1000);
+}
+
+function renderAll() {
+  renderPedidos();
+  renderCorte();
+  renderStock();
+  renderConfig();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NAVEGACIÓN CON ANIMACIONES
+// ─────────────────────────────────────────────────────────────────────────────
+const TABS = ['pedidos','corte','stock','config'];
+let curView = 'pedidos';
+
+function setupNav() {
+  document.querySelectorAll('[data-nav]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.nav;
+      if (t === 'nueva') { openNuevaSheet(); return; }
+      navigateTo(t);
+    })
+  );
+  history.replaceState({ view:'pedidos' }, '');
+  window.addEventListener('popstate', () => {
+    const i = TABS.indexOf(curView);
+    const p = i > 0 ? TABS[i-1] : 'pedidos';
+    navInternal(p); history.pushState({ view:p }, '');
+  });
+}
+
+function navInternal(name) {
+  const prevIdx = TABS.indexOf(curView);
+  const nextIdx = TABS.indexOf(name);
+  const direction = nextIdx > prevIdx ? 'right' : 'left';
+
+  curView = name;
+  Object.values(VIEWS).forEach(v => {
+    v.classList.remove('active','slide-right','slide-left');
+  });
+  document.querySelectorAll('[data-nav]').forEach(b => b.classList.remove('active'));
+
+  const nextView = VIEWS[name];
+  if (nextView) {
+    nextView.classList.add('active');
+    if (prevIdx !== nextIdx) {
+      nextView.classList.add(direction === 'right' ? 'slide-right' : 'slide-left');
+      nextView.addEventListener('animationend', () => {
+        nextView.classList.remove('slide-right','slide-left');
+      }, { once: true });
+    }
+  }
+  document.querySelector(`[data-nav="${name}"]`)?.classList.add('active');
+  const T = { pedidos:'FullSports', corte:'Corte', stock:'Stock', config:'Zonas FLEX' };
+  document.getElementById('topbar-title').textContent = T[name] || 'FullSports';
+}
+function navigateTo(name) { navInternal(name); history.pushState({ view:name }, ''); }
+
+// Swipe horizontal
+function setupSwipe() {
+  let x0=0, y0=0;
+  const mc = document.getElementById('main-content');
+  mc.addEventListener('touchstart', e=>{ x0=e.touches[0].clientX; y0=e.touches[0].clientY; }, { passive:true });
+  mc.addEventListener('touchend', e=>{
+    const dx = e.changedTouches[0].clientX - x0;
+    const dy = e.changedTouches[0].clientY - y0;
+    if (Math.abs(dx) < 80 || Math.abs(dy) > Math.abs(dx)/2.5) return;
+    const i = TABS.indexOf(curView);
+    if (dx < 0 && i < TABS.length-1) navigateTo(TABS[i+1]);
+    if (dx > 0 && i > 0) navigateTo(TABS[i-1]);
+  }, { passive:true });
+}
+
+// Cerrar sheet arrastrando hacia abajo
+function setupSheetDrag() {
+  document.querySelectorAll('.sheet').forEach(sh => {
+    ['sheet-handle','sheet-title'].forEach(cls => {
+      const el = sh.querySelector('.'+cls); if (!el) return;
+      let y0 = 0;
+      el.addEventListener('touchstart', e=>{ y0=e.touches[0].clientY; }, { passive:true });
+      el.addEventListener('touchend',   e=>{ if (e.changedTouches[0].clientY - y0 > 60) closeSheet(sh); }, { passive:true });
+    });
+  });
+}
+
+function setupOffline() {
+  const upd = () => $offline.classList.toggle('show', !navigator.onLine);
+  window.addEventListener('online',  () => { upd(); connectFirestore(); });
+  window.addEventListener('offline', upd);
+  upd();
+}
+
+async function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default')
+    await Notification.requestPermission();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERTAS DE DESPACHO
+// ─────────────────────────────────────────────────────────────────────────────
+function dispTarget(tipo) {
+  const t = new Date(); t.setHours(tipo==='FLEX'?13:14,0,0,0);
+  if (t <= new Date()) t.setDate(t.getDate()+1);
+  return t;
+}
+function fmtDiff(ms_) {
+  const m = Math.max(0,Math.floor(ms_/60000)), h = Math.floor(m/60);
+  return h>0 ? `${h}h ${String(m%60).padStart(2,'0')}m` : `${m}m`;
+}
+function setupAlerts() {
+  alertTimers.forEach(clearTimeout); alertTimers=[];
+  const now=new Date();
+  [
+    {h:12,m:30,t:'warning',msg:'⏰ 30 min para despachar FLEX'},
+    {h:12,m:50,t:'urgent', msg:'🚨 10 min para despachar FLEX'},
+    {h:13,m:30,t:'warning',msg:'⏰ 30 min para despachar PE'},
+    {h:13,m:50,t:'urgent', msg:'🚨 10 min para despachar PE'},
+  ].forEach(({h,m,t,msg}) => {
+    const d=new Date(now); d.setHours(h,m,0,0);
+    const diff=d-now; if (diff>0) alertTimers.push(setTimeout(()=>showAlert(t,msg),diff));
+  });
+  setInterval(updateCountdowns, 30000);
+}
+function showAlert(type,msg) {
+  $alert.className=`alert-banner show ${type}`; $alert.textContent=msg;
+  setTimeout(()=>$alert.classList.remove('show'),8000);
+  if (Notification.permission==='granted') new Notification('FullSports',{body:msg});
+}
+function updateCountdowns() {
+  document.querySelectorAll('[data-cd]').forEach(el=>{
+    const diff=dispTarget(el.dataset.cd)-new Date(), min=Math.floor(diff/60000);
+    el.textContent=fmtDiff(diff);
+    el.className='countdown'+(min<=15?' urgent':min<=60?' warn':'');
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PEDIDOS VIEW
+// ─────────────────────────────────────────────────────────────────────────────
+const SPRI = {preparar:0,pendiente:1,camino:2,entregado:3};
+
+function renderPedidos() {
+  const v=VIEWS.pedidos; if (!v) return;
+
+  const preparar  = orders.filter(o=>o.status==='preparar');
+  const pendiente = orders.filter(o=>o.status==='pendiente');
+  const camino    = orders.filter(o=>o.status==='camino');
+  // Ventana 24h para entregados
+  const entregados= orders.filter(o=>o.status==='entregado' && Date.now()-ms(o.deliveredAt)<H24);
+
+  const nPrep=preparar.length;
+  const nDesp=pendiente.length+camino.length;
+  const nEntr=entregados.length;
+  const nFlex=pendiente.filter(o=>o.tipoEnvio==='FLEX').length;
+  const nPE  =pendiente.filter(o=>o.tipoEnvio==='PE').length;
+
+  let body='';
+
+  if (pedidosTab==='preparar') {
+    const sorted=[...preparar].sort((a,b)=>(a.tipoEnvio==='FLEX'?0:10)-(b.tipoEnvio==='FLEX'?0:10));
+    const bar=`<div class="home-bar">
+      ${nFlex?`<button class="dispatch-btn flex-btn" onclick="despacharTodos('FLEX')">🚚 Despachar FLEX (${nFlex})</button>`:''}
+      ${nPE  ?`<button class="dispatch-btn pe-btn"   onclick="despacharTodos('PE')">📦 Despachar PE (${nPE})</button>`:''}
+      <button class="btn-dep" id="btn-dep" onclick="toggleDep()">🏪 Depósito</button>
+    </div>
+    <div id="dep-box" style="display:none" class="dep-box"></div>`;
+    body = bar+(sorted.length
+      ? `<div class="ped-body">${sorted.map(orderCard).join('')}</div>`
+      : `<div class="empty-state"><span>✅</span><p>Sin pedidos por preparar</p></div>`);
+
+  } else if (pedidosTab==='despacho') {
+    // Ordenar: primero pendientes, luego camino. Camino capi por fecha estimada.
+    const sorted=[...pendiente,...camino].sort((a,b)=>{
+      const sp = SPRI[a.status]-SPRI[b.status]; if (sp!==0) return sp;
+      if (a.status==='camino'&&b.status==='camino') return parseLocalDate(a.fechaEstimada)-parseLocalDate(b.fechaEstimada);
+      return 0;
+    });
+    body=sorted.length
+      ?`<div class="ped-body">${sorted.map(orderCard).join('')}</div>`
+      :`<div class="empty-state"><span>📦</span><p>Sin pedidos en camino</p></div>`;
+
+  } else {
+    const sorted=[...entregados].sort((a,b)=>ms(b.deliveredAt)-ms(a.deliveredAt));
+    body=sorted.length
+      ?`<div class="ped-body">${sorted.map(orderCard).join('')}</div>`
+      :`<div class="empty-state"><span>📭</span><p>Sin entregados en las últimas 24hs</p></div>`;
+  }
+
+  v.innerHTML=`
+    <div class="pedidos-tabs">
+      <button class="pedidos-tab${pedidosTab==='preparar'?' active':''}" onclick="setTab('preparar')">
+        Preparar${nPrep?`<span class="tab-badge">${nPrep}</span>`:''}
+      </button>
+      <button class="pedidos-tab${pedidosTab==='despacho'?' active':''}" onclick="setTab('despacho')">
+        En camino${nDesp?`<span class="tab-badge">${nDesp}</span>`:''}
+      </button>
+      <button class="pedidos-tab${pedidosTab==='entregados'?' active':''}" onclick="setTab('entregados')">
+        Entregados${nEntr?`<span class="tab-badge">${nEntr}</span>`:''}
+      </button>
+    </div>
+    ${body}`;
+  updateCountdowns();
+}
+window.setTab = t => { pedidosTab=t; renderPedidos(); };
+
+function parseLocalDate(ddmmyyyy) {
+  if (!ddmmyyyy) return Infinity;
+  const p=ddmmyyyy.split('/');
+  if (p.length!==3) return Infinity;
+  return new Date(p[2],p[1]-1,p[0]).getTime();
+}
+
+// Depósito inline
+function calcDep() {
+  const g={};
+  orders.filter(o=>o.status==='preparar').forEach(o=>(o.items||[]).forEach(item=>{
+    const k=`${item.producto}||${item.talle}`; g[k]=(g[k]||0)+1;
+  }));
+  return Object.entries(g)
+    .sort(([a],[b])=>{ const[aP,aT]=a.split('||'),[bP,bT]=b.split('||'); return aP!==bP?aP.localeCompare(bP):parseInt(aT)-parseInt(bT); })
+    .map(([k,qty])=>{ const[prod,talle]=k.split('||'); return {prod,talle,qty,queda:Math.max(0,(stock[`${prod}_${talle}`]??0)-qty)}; });
+}
+window.toggleDep = () => {
+  const box=document.getElementById('dep-box'), btn=document.getElementById('btn-dep'); if (!box) return;
+  if (box.style.display!=='none') { box.style.display='none'; btn.textContent='🏪 Depósito'; return; }
+  const lines=calcDep(), nP=orders.filter(o=>o.status==='preparar').length;
+  box.innerHTML = !lines.length
+    ? `<p class="hint-text">Sin pedidos para preparar</p>`
+    : `<div class="dep-hdr">${lines.reduce((a,l)=>a+l.qty,0)} pares · ${nP} pedido${nP!==1?'s':''}</div>
+       ${lines.map(l=>`<div class="dep-row"><span class="dep-n">${l.prod} T${l.talle}</span><span class="dep-q">×${l.qty}</span><span class="dep-r ${l.queda===0?'cero':l.queda<=2?'bajo':'ok'}">queda ${l.queda}</span></div>`).join('')}`;
+  box.style.display='block'; btn.textContent='🏪 Ocultar';
+};
+
+function orderCard(o) {
+  const cb=`<span class="badge badge-${o.cuenta}">${o.cuenta.toUpperCase()}</span>`;
+  const eb=o.tipoEnvio==='FLEX'?`<span class="badge badge-flex">FLEX</span>`:`<span class="badge badge-pe">PE</span>`;
+  const sc=!o.corteDone?'<span class="badge badge-sin-corte">Sin corte</span>':'';
+
+  let cd='';
+  if (['preparar','pendiente'].includes(o.status)) {
+    const diff=dispTarget(o.tipoEnvio)-new Date(), min=Math.floor(diff/60000);
+    cd=`<span class="countdown${min<=15?' urgent':min<=60?' warn':''}" data-cd="${o.tipoEnvio}">${fmtDiff(diff)}</span>`;
+  }
+
+  let monto='';
+  if (o.tipoEnvio==='FLEX'&&o.importeVenta) {
+    monto=o.cuenta==='capi'
+      ?`<div class="order-monto">Acreditado <b>$${fmt(o.importeNeto)}</b></div>`
+      :`<div class="order-monto">$${fmt(o.importeVenta)} − FLEX $${fmt(o.flexImporte)} = <b>$${fmt(o.importeNeto)}</b></div>`;
+  } else {
+    monto=`<div class="order-monto">Acreditado $${fmt(o.importeAcreditado)}</div>`;
+  }
+
+  const iibb=o.cuenta==='enano'&&o.provincia?`<div class="order-iibb">${o.provincia} — IIBB $${fmtDec(o.iibb)}</div>`:'';
+
+  let fechaLine='';
+  if (o.status==='camino'&&o.fechaEstimada) {
+    fechaLine=`<div class="order-fecha">📅 Entrega estimada: <b>${o.fechaEstimada}</b> <button class="btn-link" onclick="openDelivery('${o.id}','edit')">✏️</button></div>`;
+    // Barra de progreso para enano
+    if (o.cuenta==='enano'&&ms(o.despachadoAt)>0) {
+      const elapsed=Math.min(1,(Date.now()-ms(o.despachadoAt))/H24);
+      fechaLine+=`<div class="transit-bar"><div class="transit-bar-fill" style="width:${Math.round(elapsed*100)}%"></div></div>`;
+    }
+  }
+
+  let act='';
+  if (o.status==='preparar') act=`<div class="card-act">
+    <button class="btn btn-green btn-sm" onclick="acPreparado('${o.id}')">✓ Preparado</button>
+    <button class="btn btn-ghost btn-sm" onclick="acEditar('${o.id}')">✏️ Editar</button>
+    <button class="btn btn-danger btn-sm" onclick="acEliminar('${o.id}')">🗑</button>
+  </div>`;
+  else if (o.status==='pendiente') act=`<div class="card-act">
+    <button class="btn btn-primary btn-sm" onclick="acDespachado('${o.id}')">🚚 Despachar</button>
+    <button class="btn btn-ghost btn-sm"   onclick="acEditar('${o.id}')">✏️</button>
+    <button class="btn btn-danger btn-sm"  onclick="acEliminar('${o.id}')">🗑</button>
+  </div>`;
+  else if (o.status==='camino') act=`<div class="card-act">
+    <button class="btn btn-green btn-sm" onclick="acEntregado('${o.id}')">✓ Entregado</button>
+    <button class="btn btn-ghost btn-sm" onclick="acEditar('${o.id}')">✏️</button>
+  </div>`;
+  else if (o.status==='entregado') act=`<div class="card-ok">✓ Entregado${o.fechaEntrega?' el '+o.fechaEntrega:''}</div>`;
+
+  return `<div class="order-card${['preparar','pendiente'].includes(o.status)&&o.tipoEnvio==='FLEX'?' flex-active':''}">
+    <div class="order-header">${cb}${eb}${sc}${cd}</div>
+    <div class="order-name">${o.nombreComprador}</div>
+    <div class="order-items">${fmtItemsShort(o.items)}</div>
+    ${fechaLine}${iibb}${monto}${act}
+  </div>`;
+}
+
+function sortIt(items) {
+  return [...(items||[])].sort((a,b)=>a.producto!==b.producto?a.producto.localeCompare(b.producto):a.talle-b.talle);
+}
+function fmtItemsShort(items) {
+  if (!items||!items.length) return '';
+  const s=sortIt(items); if (s.length===1) return `${s[0].producto} T${s[0].talle}`;
+  const g={}; s.forEach(i=>{const k=`${i.producto} T${i.talle}`;g[k]=(g[k]||0)+1;});
+  return `${s.length} pares — ${Object.entries(g).map(([k,q])=>q>1?`${k}×${q}`:k).join(' · ')}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCIONES DE PEDIDOS
+// ─────────────────────────────────────────────────────────────────────────────
+window.acPreparado = async id => {
+  const o=orders.find(o=>o.id===id);
+  mutateOrder(id,{status:'pendiente'});
+  pedidosTab='despacho'; renderPedidos(); renderCorte();
+  try {
+    await updateDoc(doc(db,'orders',id),{status:'pendiente'});
+    if (o?.items) {
+      const ns={...stock};
+      o.items.forEach(i=>{const k=`${i.producto}_${i.talle}`;ns[k]=Math.max(0,(ns[k]||0)-1);});
+      stock=ns; saveStock();
+      await setDoc(doc(db,'meta','stock'),ns);
+    }
+  } catch(e){toast('Sin red — se sincronizará');}
+};
+
+window.acDespachado = async id => {
+  const o=orders.find(o=>o.id===id); if (!o) return;
+  if (o.cuenta==='capi') {
+    // Pedir fecha estimada para capi
+    openDelivery(id, 'dispatch');
+    return;
+  }
+  // Enano: auto 24h desde ahora
+  const enanoFecha = proximoDia();
+  mutateOrder(id,{status:'camino', fechaEstimada:enanoFecha, despachadoAt:Date.now()});
+  renderPedidos();
+  try { await updateDoc(doc(db,'orders',id),{status:'camino',despachadoAt:serverTimestamp(),fechaEstimada:enanoFecha}); }
+  catch(e){toast('Sin red');}
+};
+
+window.despacharTodos = async tipo => {
+  const pend=orders.filter(o=>o.status==='pendiente'&&o.tipoEnvio===tipo);
+  if (!pend.length) return;
+  if (!confirm(`¿Despachar ${pend.length} pedido${pend.length>1?'s':''} ${tipo}?`)) return;
+  const fechaAuto = proximoDia();
+  pend.forEach(o=>mutateOrder(o.id,{
+    status:'camino',
+    fechaEstimada: fechaAuto,
+    despachadoAt: Date.now()
+  }));
+  pedidosTab='despacho'; renderPedidos(); renderCorte();
+  try {
+    for(const o of pend) {
+      await updateDoc(doc(db,'orders',o.id),{
+        status:'camino',
+        despachadoAt:serverTimestamp(),
+        fechaEstimada: fechaAuto
+      });
+    }
+    toast(`${pend.length} pedidos ${tipo} despachados ✓`);
+  } catch(e){toast('Sin red');}
+};
+
+window.acEntregado = async id => {
+  const f=new Date().toLocaleDateString('es-AR');
+  mutateOrder(id,{status:'entregado',fechaEntrega:f,deliveredAt:Date.now()}); renderPedidos(); renderCorte();
+  try { await updateDoc(doc(db,'orders',id),{status:'entregado',deliveredAt:serverTimestamp(),fechaEntrega:f}); } catch(e){toast('Sin red');}
+};
+window.acEliminar = async id => {
+  if (!confirm('¿Eliminar este pedido?')) return;
+  orders=orders.filter(o=>o.id!==id); saveOrders(); renderPedidos(); renderCorte();
+  try { await deleteDoc(doc(db,'orders',id)); } catch(e){toast('Sin red');}
+};
+window.acEditar = id => { const o=orders.find(o=>o.id===id); if(o) openNuevaSheet(o); };
+
+function mutateOrder(id,patch) {
+  const i=orders.findIndex(o=>o.id===id);
+  if (i>=0) { orders[i]={...orders[i],...patch}; saveOrders(); }
+}
+
+function proximoDia() {
+  const d=new Date(); d.setDate(d.getDate()+1);
+  return d.toLocaleDateString('es-AR');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHEET FECHA ESTIMADA (editar o despachar capi)
+// ─────────────────────────────────────────────────────────────────────────────
+function setupDeliverySheet() {
+  document.getElementById('btn-save-delivery')?.addEventListener('click', async () => {
+    const val = document.getElementById('delivery-date-input').value;
+    if (!val || !deliveryId) { closeSheet($shDeliv); return; }
+    const fechaStr = inputToDate(val);
+
+    if (deliveryAction === 'dispatch') {
+      // Despachar capi con la fecha elegida
+      mutateOrder(deliveryId, { status:'camino', fechaEstimada:fechaStr, despachadoAt:Date.now() });
+      renderPedidos(); renderCorte();
+      try {
+        await updateDoc(doc(db,'orders',deliveryId),{
+          status:'camino',
+          despachadoAt:serverTimestamp(),
+          fechaEstimada:fechaStr,
+        });
+        toast('Despachado ✓');
+      } catch(e){toast('Sin red');}
+    } else {
+      // Editar fecha estimada
+      mutateOrder(deliveryId, { fechaEstimada:fechaStr }); renderPedidos();
+      try { await updateDoc(doc(db,'orders',deliveryId),{fechaEstimada:fechaStr}); } catch(e){}
+    }
+    closeSheet($shDeliv);
+  });
+}
+
+window.openDelivery = (id, action='edit') => {
+  deliveryId=id; deliveryAction=action;
+  const o=orders.find(o=>o.id===id);
+  const titleEl=document.getElementById('delivery-sheet-title');
+  if (titleEl) titleEl.textContent = action==='dispatch' ? 'Fecha estimada de entrega (CAPI)' : 'Editar fecha estimada';
+  const inp=document.getElementById('delivery-date-input');
+  if (inp) inp.value = action==='edit' ? (dateToInput(o?.fechaEstimada)||'') : tomorrowInput();
+  openSheet($shDeliv);
+};
+
+function dateToInput(ddmmyyyy) {
+  if (!ddmmyyyy) return '';
+  const p=ddmmyyyy.split('/'); if (p.length!==3) return '';
+  return `${p[2]}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}`;
+}
+function inputToDate(yyyymmdd) {
+  if (!yyyymmdd) return '';
+  const [y,m,d]=yyyymmdd.split('-');
+  return `${d}/${m}/${y}`;
+}
+function tomorrowInput() {
+  const d=new Date(); d.setDate(d.getDate()+1);
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${dd}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORMULARIO NUEVA VENTA
+// ─────────────────────────────────────────────────────────────────────────────
+function openNuevaSheet(data=null) {
+  editingId   = data?.id||null;
+  formItems   = data?.items ? [...data.items] : [];
+  formEnvio   = null;
+  curProducto = null;
+  stockAll    = false;
+
+  $shNueva.querySelector('.sheet-title').textContent = editingId ? 'Editar pedido' : 'Nueva venta';
+  setCuenta(data?.cuenta||'capi');
+  setEnvio(data?.tipoEnvio||'FLEX');
+  V('f-nombre').value       = data?.nombreComprador||'';
+  V('f-provincia').value    = data?.provincia||'';
+  V('f-iibb').value         = data?.iibb ? fmtDec(data.iibb) : '';
+  V('f-importe-pe').value   = data?.importeAcreditado||'';
+  V('f-importe-flex').value = data?.importeVenta||'';
+  V('btn-stock-override').textContent = '✏️ Manual';
+
+  if (data?.tipoEnvio==='FLEX'&&data.flexLocalidad) {
+    formEnvio={localidad:data.flexLocalidad,zona:data.flexZona,importe:data.flexImporte};
+    showZoneSelected();
+  } else clearZone();
+
+  renderProdBtns();
+  V('talle-wrap').style.display   = 'none';
+  V('btn-add-otro').style.display = 'none';
+  V('btn-multi').style.display    = 'none';
+  V('multi-wrap').style.display   = 'none';
+  removeCantWrap();
+  renderFormItems();
+  openSheet($shNueva);
+  setTimeout(()=>$shNueva.querySelector('.sheet-body').scrollTop=0,50);
+}
+
+function setCuenta(c) {
+  curCuenta=c;
+  document.querySelectorAll('[data-cuenta]').forEach(b=>b.classList.toggle('active',b.dataset.cuenta===c));
+  V('enano-fields').style.display=c==='enano'?'flex':'none';
+}
+function setEnvio(t) {
+  curEnvio=t;
+  document.querySelectorAll('[data-envio]').forEach(b=>b.classList.toggle('active',b.dataset.envio===t));
+  V('flex-fields').style.display=t==='FLEX'?'flex':'none';
+  V('pe-fields').style.display  =t==='PE'  ?'flex':'none';
+}
+
+function setupFormListeners() {
+  document.querySelectorAll('[data-cuenta]').forEach(b=>b.addEventListener('click',()=>setCuenta(b.dataset.cuenta)));
+  document.querySelectorAll('[data-envio]').forEach(b=>b.addEventListener('click',()=>setEnvio(b.dataset.envio)));
+  V('f-importe-flex').addEventListener('input',updateNeto);
+  V('btn-stock-override').addEventListener('click',()=>{
+    stockAll=!stockAll;
+    V('btn-stock-override').textContent=stockAll?'✏️ Todo':'✏️ Manual';
+    curProducto=null; renderProdBtns(); V('talle-wrap').style.display='none'; removeCantWrap();
+  });
+  V('btn-add-otro').addEventListener('click',()=>{
+    renderProdBtns(); V('talle-wrap').style.display='none'; removeCantWrap();
+    V('btn-add-otro').style.display='none'; V('btn-multi').style.display='none';
+    V('item-selector-wrap').scrollIntoView({behavior:'smooth',block:'start'});
+  });
+  V('btn-multi').addEventListener('click',()=>{
+    multiProd=null; multiTalle=null;
+    renderMultiProd();
+    V('multi-talle-wrap').style.display='none';
+    V('multi-cant-wrap').style.display='none';
+    V('multi-wrap').style.display='block';
+    V('multi-wrap').scrollIntoView({behavior:'smooth',block:'start'});
+  });
+  V('mc-minus')?.addEventListener('click',()=>{const i=V('mc-val');if(i)i.value=Math.max(1,parseInt(i.value||1)-1);});
+  V('mc-plus') ?.addEventListener('click',()=>{const i=V('mc-val');if(i)i.value=Math.min(99,parseInt(i.value||1)+1);});
+  V('mc-confirm')?.addEventListener('click',()=>{
+    if (!multiProd||!multiTalle) return;
+    const qty=Math.max(1,parseInt(V('mc-val')?.value||1));
+    for(let i=0;i<qty;i++) formItems.push({producto:multiProd,talle:multiTalle});
+    renderFormItems(); multiTalle=null;
+    V('multi-talle-wrap').style.display='none'; V('multi-cant-wrap').style.display='none';
+    document.querySelectorAll('#multi-talle-btns .talle-btn').forEach(b=>b.classList.remove('active'));
+    V('btn-add-otro').style.display='flex';
+    toast(`${qty} par${qty>1?'es':''} agregado${qty>1?'s':''}`);
+  });
+  V('btn-guardar-venta').addEventListener('click', guardarVenta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BÚSQUEDA DE LOCALIDAD — FIX: position:fixed para evitar clip por overflow
+// El div #localidad-results está fuera del sheet en el HTML,
+// y lo posicionamos con fixed relativo al input mediante getBoundingClientRect().
+// ─────────────────────────────────────────────────────────────────────────────
+function setupLocalidadSearch() {
+  const inp = V('f-localidad');
+  const res = V('localidad-results');
+  if (!inp || !res) return;
+
+  function positionDropdown() {
+    const rect = inp.getBoundingClientRect();
+    res.style.top   = `${rect.bottom + 4}px`;
+    res.style.left  = `${rect.left}px`;
+    res.style.width = `${rect.width}px`;
+  }
+
+  function buildResults() {
+    const q = inp.value.toLowerCase().trim();
+    if (!q) { res.classList.remove('show'); zoneHits=[]; return; }
+    zoneHits = zones.filter(z=>z.localidad.toLowerCase().includes(q)).slice(0,8);
+    if (!zoneHits.length) { res.classList.remove('show'); return; }
+
+    res.innerHTML = zoneHits.map((z,i)=>`
+      <div class="search-result-item" data-zi="${i}">
+        <div>
+          <div class="sri-name">${z.localidad}</div>
+          <div class="search-result-zona">${z.zona}</div>
+        </div>
+        <div class="sri-precio">$${fmt(z.importe)}</div>
+      </div>`).join('');
+
+    positionDropdown();
+    res.classList.add('show');
+
+    res.querySelectorAll('.search-result-item').forEach(el => {
+      const pick = e => {
+        e.preventDefault(); e.stopPropagation();
+        const z = zoneHits[parseInt(el.dataset.zi)];
+        if (!z) return;
+        formEnvio = { localidad:z.localidad, zona:z.zona, importe:z.importe };
+        inp.value = '';
+        res.classList.remove('show');
+        showZoneSelected();
+        updateNeto();
+      };
+      el.addEventListener('mousedown',  pick);
+      el.addEventListener('touchstart', pick, {passive:false});
+    });
+  }
+
+  inp.addEventListener('input', buildResults);
+
+  // Reposicionar si hay scroll (ej. sheet body scrollea)
+  document.addEventListener('scroll', () => {
+    if (res.classList.contains('show')) positionDropdown();
+  }, true);
+
+  // Cerrar al hacer click fuera
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.search-wrap') && !res.contains(e.target)) {
+      res.classList.remove('show');
+    }
+  });
+}
+
+function showZoneSelected() {
+  const el=V('flex-selected'); if (!el||!formEnvio) return;
+  el.innerHTML=`
+    <div>
+      <div class="flex-selected-name">${formEnvio.localidad}</div>
+      <div style="font-size:11px;color:var(--text-3)">${formEnvio.zona}</div>
+    </div>
+    <div style="text-align:right">
+      <div class="flex-selected-importe">−$${fmt(formEnvio.importe)}</div>
+      <button class="btn-link" style="color:var(--red);font-size:11px" id="btn-clear-zone">Cambiar</button>
+    </div>`;
+  el.classList.add('show');
+  document.getElementById('btn-clear-zone')?.addEventListener('click', clearZone);
+  updateNeto();
+}
+function clearZone() {
+  formEnvio=null;
+  const el=V('flex-selected'); if(el) el.classList.remove('show');
+  const fn=V('flex-neto'); if(fn) fn.textContent='';
+}
+function updateNeto() {
+  const v=parseNum(V('f-importe-flex')?.value||'');
+  const fn=V('flex-neto'); if(fn) fn.textContent=formEnvio&&v>0?`Neto: $${fmt(v-formEnvio.importe)}`:'';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SELECTOR PRODUCTOS / TALLES
+// ─────────────────────────────────────────────────────────────────────────────
+function renderProdBtns() {
+  const disp=PRODUCTOS.filter(p=>stockAll||TALLES.some(t=>(stock[`${p}_${t}`]??0)>0));
+  const c=V('producto-btns'); if (!c) return;
+  c.innerHTML=disp.length
+    ?disp.map(p=>`<button class="producto-btn" onclick="selProd('${p}')">${p}</button>`).join('')
+    :`<p class="hint-text">Sin stock — activá ✏️ Manual</p>`;
+}
+window.selProd = p => {
+  curProducto=p;
+  document.querySelectorAll('#producto-btns .producto-btn').forEach(b=>b.classList.toggle('active',b.textContent.trim()===p));
+  const avail=TALLES.filter(t=>stockAll||(stock[`${p}_${t}`]??0)>0);
+  V('talle-btns').innerHTML=avail.map(t=>`<button class="talle-btn" onclick="selTalle(${t})">${t}</button>`).join('');
+  V('talle-wrap').style.display='flex'; removeCantWrap();
+};
+window.selTalle = t => {
+  document.querySelectorAll('#talle-btns .talle-btn').forEach(b=>b.classList.toggle('active',parseInt(b.textContent)===t));
+  showCantWrap(t);
+};
+function showCantWrap(talle) {
+  removeCantWrap();
+  const w=document.createElement('div'); w.id='scw'; w.className='cant-wrap';
+  w.innerHTML=`<span class="cant-label">Cantidad</span>
+    <div class="cant-row">
+      <button class="stepper-btn" id="sc-">−</button>
+      <input class="cant-val-input" id="sc-v" type="number" value="1" min="1" max="99" inputmode="numeric">
+      <button class="stepper-btn" id="sc+">+</button>
+      <button class="btn btn-primary btn-sm" id="sc-ok">Agregar</button>
+    </div>`;
+  V('talle-wrap').insertAdjacentElement('afterend',w);
+  document.getElementById('sc-').onclick=()=>{const i=V('sc-v');i.value=Math.max(1,parseInt(i.value||1)-1);};
+  document.getElementById('sc+').onclick=()=>{const i=V('sc-v');i.value=Math.min(99,parseInt(i.value||1)+1);};
+  document.getElementById('sc-ok').onclick=()=>{
+    const qty=Math.max(1,parseInt(V('sc-v').value)||1);
+    for(let i=0;i<qty;i++) formItems.push({producto:curProducto,talle});
+    renderFormItems(); curProducto=null;
+    V('talle-wrap').style.display='none'; removeCantWrap();
+    document.querySelectorAll('#producto-btns .producto-btn').forEach(b=>b.classList.remove('active'));
+    V('btn-add-otro').style.display='flex'; V('btn-multi').style.display='flex';
+  };
+}
+function removeCantWrap() { document.getElementById('scw')?.remove(); }
+
+function renderMultiProd() {
+  const disp=PRODUCTOS.filter(p=>stockAll||TALLES.some(t=>(stock[`${p}_${t}`]??0)>0));
+  V('multi-producto-btns').innerHTML=disp.map(p=>`<button class="producto-btn" onclick="mSelProd('${p}')">${p}</button>`).join('');
+}
+window.mSelProd = p => {
+  multiProd=p; multiTalle=null;
+  document.querySelectorAll('#multi-producto-btns .producto-btn').forEach(b=>b.classList.toggle('active',b.textContent.trim()===p));
+  const avail=TALLES.filter(t=>stockAll||(stock[`${p}_${t}`]??0)>0);
+  V('multi-talle-btns').innerHTML=avail.map(t=>`<button class="talle-btn" onclick="mSelTalle(${t})">${t}</button>`).join('');
+  V('multi-talle-wrap').style.display='flex'; V('multi-cant-wrap').style.display='none';
+};
+window.mSelTalle = t => {
+  multiTalle=t;
+  document.querySelectorAll('#multi-talle-btns .talle-btn').forEach(b=>b.classList.toggle('active',parseInt(b.textContent)===t));
+  const i=V('mc-val'); if(i) i.value=1;
+  V('multi-cant-wrap').style.display='flex';
+};
+
+function renderFormItems() {
+  const list=V('items-list'); if (!list) return;
+  if (!formItems.length) { list.innerHTML=''; return; }
+  const g={};
+  formItems.forEach((item,i)=>{ const k=`${item.producto}||${item.talle}`; if(!g[k]) g[k]={...item,idx:[]}; g[k].idx.push(i); });
+  list.innerHTML=Object.entries(g).map(([,{producto,talle,idx}])=>`
+    <div class="item-row">
+      <span class="item-row-text">${producto} T${talle}${idx.length>1?` <b>×${idx.length}</b>`:''}</span>
+      <button class="item-remove" onclick="rmItem(${idx[idx.length-1]})">×</button>
+    </div>`).join('');
+}
+window.rmItem = i => { formItems.splice(i,1); renderFormItems(); };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GUARDAR VENTA
+// ─────────────────────────────────────────────────────────────────────────────
+async function guardarVenta() {
+  const nombre=V('f-nombre').value.trim();
+  if (!nombre)           { toast('Ingresá el nombre'); return; }
+  if (!formItems.length) { toast('Agregá al menos un ítem'); return; }
+
+  if (!editingId) {
+    const dups=orders.filter(o=>o.nombreComprador.toLowerCase()===nombre.toLowerCase()&&o.status!=='entregado');
+    if (dups.length&&!confirm(`Ya hay un pedido de "${nombre}". ¿Continuar?`)) return;
+  }
+
+  const base={
+    cuenta:curCuenta, nombreComprador:nombre, tipoEnvio:curEnvio, items:formItems,
+    status: editingId?(orders.find(o=>o.id===editingId)?.status||'preparar'):'preparar',
+    corteDone: editingId?(orders.find(o=>o.id===editingId)?.corteDone||false):false,
+  };
+  if (curCuenta==='enano') { base.provincia=V('f-provincia').value.trim(); base.iibb=parseNum(V('f-iibb').value)||0; }
+  if (curEnvio==='FLEX') {
+    if (!formEnvio) { toast('Seleccioná la localidad'); return; }
+    const v=parseNum(V('f-importe-flex').value); if (!v) { toast('Ingresá el importe'); return; }
+    base.importeVenta=v; base.flexLocalidad=formEnvio.localidad; base.flexZona=formEnvio.zona;
+    base.flexImporte=formEnvio.importe; base.importeNeto=v-formEnvio.importe; base.importeAcreditado=base.importeNeto;
+  } else {
+    const m=parseNum(V('f-importe-pe').value); if (!m) { toast('Ingresá el importe'); return; }
+    base.importeAcreditado=m;
+  }
+  if (!editingId) {
+    const hoy=new Date(), man=new Date(hoy); man.setDate(hoy.getDate()+1);
+    base.fechaEstimada=curEnvio==='FLEX'?hoy.toLocaleDateString('es-AR'):man.toLocaleDateString('es-AR');
+  }
+  closeSheet($shNueva);
+  try {
+    if (editingId) {
+      await updateDoc(doc(db,'orders',editingId),base);
+      mutateOrder(editingId,base); saveOrders(); renderPedidos(); renderCorte();
+      toast('Actualizado ✓');
+    } else {
+      base.createdAt=serverTimestamp();
+      const ref=await addDoc(collection(db,'orders'),base);
+      orders.unshift({id:ref.id,...base}); saveOrders(); renderPedidos(); renderCorte();
+      toast('Venta guardada ✓');
+    }
+  } catch(e) { toast('Error al guardar'); console.error(e); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORTE VIEW
+// ─────────────────────────────────────────────────────────────────────────────
+function renderCorte() {
+  const v=VIEWS.corte; if (!v) return;
+  const nC=orders.filter(o=>!o.corteDone&&o.cuenta==='capi').length;
+  const nE=orders.filter(o=>!o.corteDone&&o.cuenta==='enano').length;
+  const nP=orders.filter(o=>o.status==='preparar').length;
+  v.innerHTML=`
+    <div class="corte-tabs">
+      <button class="corte-tab${corteCuenta==='capi'?' active':''}"     onclick="setCorte('capi')">CAPI <span class="corte-count">${nC}</span></button>
+      <button class="corte-tab${corteCuenta==='enano'?' active':''}"    onclick="setCorte('enano')">ENANO <span class="corte-count">${nE}</span></button>
+      <button class="corte-tab${corteCuenta==='deposito'?' active':''}" onclick="setCorte('deposito')">Depósito${nP?` <span class="corte-count">${nP}</span>`:''}</button>
+    </div>
+    ${renderCorteBody()}`;
+}
+window.setCorte = c => { corteCuenta=c; renderCorte(); };
+
+function renderCorteBody() {
+  if (corteCuenta==='deposito') return renderDepCorte();
+  const pend=orders.filter(o=>!o.corteDone&&o.cuenta===corteCuenta);
+  if (!pend.length) return `<div class="empty-state"><span>✂️</span><p>Sin ventas pendientes de corte para ${corteCuenta.toUpperCase()}</p></div>`;
+  const tV=corteCuenta==='capi'?textoCapi(pend):textoEnano(pend);
+  const tC=textoCostos(pend,corteCuenta);
+  return `
+    <div class="card" style="padding:16px">
+      <div class="section-title">Ventas ${corteCuenta.toUpperCase()}</div>
+      <div class="text-output" style="margin-top:8px">${renderWA(tV)}</div>
+      <div class="card-act" style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="copyTxt(${esc(tV)})">📋 Copiar</button>
+        <button class="btn btn-primary btn-sm" onclick="doCortado('${corteCuenta}')">✓ Marcar cortado</button>
+      </div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="section-title">Costos ${corteCuenta.toUpperCase()}</div>
+      <div class="text-output" style="margin-top:8px">${renderWA(tC)}</div>
+      <div class="card-act" style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="copyTxt(${esc(tC)})">📋 Copiar</button>
+      </div>
+    </div>
+    <div class="section-title">Incluidos (${pend.length})</div>
+    ${pend.map(o=>`<div class="card" style="padding:12px 14px">
+      <b>${o.nombreComprador}</b>
+      <div style="font-size:13px;color:var(--text-2)">${fmtItemsShort(o.items)}</div>
+      <div style="font-size:12px;color:var(--text-3)">$${fmt(o.importeAcreditado)}</div>
+    </div>`).join('')}`;
+}
+
+function renderDepCorte() {
+  const prep=orders.filter(o=>o.status==='preparar');
+  if (!prep.length) return `<div class="empty-state"><span>🏪</span><p>Sin pedidos para preparar</p></div>`;
+  const lines=calcDep();
+  const pm={};
+  lines.forEach(l=>{if(!pm[l.prod])pm[l.prod]=[];pm[l.prod].push(l);});
+  const txt=`A buscar:\n${lines.map(l=>`${l.prod} T${l.talle} ×${l.qty}`).join('\n')}\n\nTotal: ${prep.length} pedidos`;
+  return `<div class="card" style="padding:16px">
+    <div class="section-title">A buscar en depósito</div>
+    ${Object.entries(pm).map(([m,ls])=>`
+      <div class="deposito-modelo"><div class="deposito-modelo-name">${m}</div>
+        <div class="deposito-talles">${ls.map(l=>`<div class="deposito-item"><span class="deposito-talle">T${l.talle}</span><span class="deposito-qty">×${l.qty}</span></div>`).join('')}</div>
+      </div>`).join('')}
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--sep)">
+      <div class="dep-hdr" style="margin-bottom:6px">Stock restante tras preparar</div>
+      ${lines.map(l=>`<div class="dep-row"><span class="dep-n">${l.prod} T${l.talle}</span><span class="dep-q">−${l.qty}</span><span class="dep-r ${l.queda===0?'cero':l.queda<=2?'bajo':'ok'}">queda ${l.queda}</span></div>`).join('')}
+    </div>
+    <button class="btn btn-primary" style="margin-top:14px;width:100%" onclick="copyTxt(${esc(txt)})">📋 Copiar lista</button>
+  </div>
+  <div class="section-title">Por preparar (${prep.length})</div>
+  ${prep.map(o=>`<div class="card" style="padding:12px 14px">
+    <b>${o.nombreComprador}</b>
+    <div style="font-size:13px;color:var(--text-2)">${fmtItemsShort(o.items)}</div>
+    <div style="font-size:12px;color:var(--text-3)">${o.cuenta.toUpperCase()} — ${o.tipoEnvio}</div>
+  </div>`).join('')}`;
+}
+
+function textoCapi(pend) {
+  let tot=0; const L=['Ventas Meli capi'];
+  pend.forEach((o,i)=>{
+    const m=o.tipoEnvio==='FLEX'&&o.importeVenta?`se acredito $${fmt(o.importeNeto)}`:`se acredito $${fmt(o.importeAcreditado)}`;
+    L.push(`${i+1}. ${o.nombreComprador} - ${fmtItemsCorte(o.items)} - ${m}`); tot+=o.importeAcreditado||0;
+  });
+  L.push('',`Total acreditado a mp capi $${fmt(Math.round(tot/100)*100)}`); return L.join('\n');
+}
+function textoEnano(pend) {
+  let tot=0; const L=['Ventas meli enano'];
+  pend.forEach((o,i)=>{
+    const iibb=o.provincia&&o.iibb?` (${o.provincia} IIBB ya descontado $${fmtDec(o.iibb)})`:'';
+    const m=o.tipoEnvio==='FLEX'&&o.importeVenta
+      ?`importe venta $${fmt(o.importeVenta)} menos *ENVIO FLEX $${fmt(o.flexImporte)}* total sin envío $${fmt(o.importeNeto)}`
+      :`se acredito $${fmt(o.importeAcreditado)}`;
+    L.push(`${i+1}. ${o.nombreComprador}${iibb} - ${fmtItemsCorte(o.items)} - ${m}`); tot+=o.importeAcreditado||0;
+  });
+  L.push('',`*Total acreditado a mp enano $${fmt(tot)}*`); return L.join('\n');
+}
+function textoCostos(pend,c) {
+  let e=0,n=0; pend.forEach(o=>(o.items||[]).forEach(i=>TALLES_ESP.includes(i.talle)?e++:n++));
+  const L=[`Costo ${c.toUpperCase()}`];
+  if(e>0)L.push(`${e} cat especiales $${fmt(COSTO_ESP)}`);
+  if(n>0)L.push(`${n} cat comunes $${fmt(COSTO_COMUN)}`);
+  L.push('',`Total costos $${fmt(e*COSTO_ESP+n*COSTO_COMUN)}`); return L.join('\n');
+}
+function fmtItemsCorte(items) {
+  if(!items||!items.length)return'';
+  const s=sortIt(items); if(s.length===1)return`${s[0].producto.toLowerCase()} ${s[0].talle}`;
+  const g={}; s.forEach(i=>{const k=`${i.producto} ${i.talle}`;g[k]=(g[k]||0)+1;});
+  return`${s.length} pares (${Object.entries(g).map(([k,q])=>q>1?`${k} x${q}`:k).join(' - ')})`;
+}
+function renderWA(t){return t.replace(/\*(.*?)\*/g,'<b>$1</b>').replace(/\n/g,'<br>');}
+function esc(t){return JSON.stringify(t).replace(/"/g,'&quot;');}
+window.copyTxt = t=>navigator.clipboard.writeText(t).then(()=>toast('¡Copiado!'));
+window.doCortado = async c=>{
+  const pend=orders.filter(o=>!o.corteDone&&o.cuenta===c);
+  pend.forEach(o=>mutateOrder(o.id,{corteDone:true})); renderCorte();
+  try{for(const o of pend)await updateDoc(doc(db,'orders',o.id),{corteDone:true});toast('Cortado ✓');}
+  catch(e){toast('Sin red');}
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STOCK VIEW
+// ─────────────────────────────────────────────────────────────────────────────
+function renderStock() {
+  const v=VIEWS.stock; if (!v) return;
+  v.innerHTML=`
+    ${PRODUCTOS.map(p=>`
+      <div class="card stock-product-card">
+        <div class="stock-product-name">${p}</div>
+        ${TALLES.map(t=>{
+          const k=`${p}_${t}`,val=stock[k]??0,cls=val===0?'cero':val<=2?'bajo':'ok';
+          return`<div class="stock-row ${cls}">
+            <span class="stock-talle">T${t}</span>
+            <div class="stock-stepper">
+              <button class="stepper-btn" onclick="adjSt('${k}',-1)">−</button>
+              <span class="stepper-val" id="sv-${k}">${val}</span>
+              <button class="stepper-btn" onclick="adjSt('${k}',1)">+</button>
+              <button class="stepper-btn stepper-pencil" onclick="editSt('${k}')">✏️</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`).join('')}
+    <button class="btn btn-primary" style="margin:8px 0 24px" onclick="doSaveStock()">💾 Guardar stock</button>`;
+}
+window.adjSt=(k,d)=>{
+  stock[k]=Math.max(0,(stock[k]??0)+d);
+  const el=document.getElementById(`sv-${k}`);
+  if(el){el.textContent=stock[k];upRowCls(el,stock[k]);}
+};
+window.editSt=k=>{
+  const el=document.getElementById(`sv-${k}`); if(!el)return;
+  const v=prompt(`Cantidad para ${k.replace('_',' T')}:`,stock[k]??0);
+  if(v===null)return; const n=parseInt(v);
+  if(isNaN(n)||n<0){toast('Número inválido');return;}
+  stock[k]=n; el.textContent=n; upRowCls(el,n);
+};
+function upRowCls(el,v){const r=el.closest('.stock-row');if(r)r.className=`stock-row ${v===0?'cero':v<=2?'bajo':'ok'}`;}
+window.doSaveStock=async()=>{
+  saveStock();
+  try{await setDoc(doc(db,'meta','stock'),stock);toast('Stock guardado ✓');}
+  catch(e){toast('Guardado localmente ✓');}
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG — zonas FLEX
+// ─────────────────────────────────────────────────────────────────────────────
+function buildTree() {
+  const T={};
+  zones.forEach(z=>{
+    const p=z.zona.split(' - '),zL=p[0].trim(),pL=p[1]?.trim()||z.zona;
+    if(!T[zL])T[zL]={importe:z.importe,pts:{}};
+    if(!T[zL].pts[pL])T[zL].pts[pL]=[];
+    T[zL].pts[pL].push(z);
+  });
+  return T;
+}
+function renderConfig() {
+  const v=VIEWS.config; if(!v) return;
+  const T=buildTree();
+  const C={'Zona 1':'#007AFF','Zona 2':'#34C759','Zona 3':'#FF9500','Zona 4':'#FF3B30'};
+  const D={'Zona 1':'CABA','Zona 2':'GBA 1er cordón','Zona 3':'GBA 2do cordón','Zona 4':'GBA 3er cordón'};
+  v.innerHTML=`
+    <div class="section-title">Zonas FLEX</div>
+    <p class="config-hint">Tocá una zona para desplegar · ✏️ edita precio</p>
+    <div class="config-zona-list">
+    ${Object.entries(T).sort(([a],[b])=>a.localeCompare(b)).map(([zL,zD])=>{
+      const col=C[zL]||'#6b7280', open=expandZonas.has(zL);
+      const nLoc=Object.values(zD.pts).reduce((a,b)=>a+b.length,0);
+      return`<div class="config-zona-card">
+        <div class="config-zona-header" onclick="togZona('${zL}')" style="border-left:4px solid ${col}">
+          <div class="config-zona-info">
+            <span class="config-zona-label" style="color:${col}">${zL}</span>
+            <span class="config-zona-sub">${D[zL]||''}</span>
+          </div>
+          <div class="config-zona-right">
+            <span class="config-zona-precio">$${fmt(zD.importe)}</span>
+            <button class="icon-btn" onclick="event.stopPropagation();editZPrice('${zL}',${zD.importe})">✏️</button>
+            <span class="zona-arrow">${open?'▲':'▼'}</span>
+          </div>
+        </div>
+        ${open?`<div class="config-zona-body">
+          <div class="config-zona-stats">${Object.keys(zD.pts).length} partidos · ${nLoc} localidades</div>
+          ${Object.entries(zD.pts).sort(([a],[b])=>a.localeCompare(b)).map(([pL,locs])=>{
+            const pk=`${zL}||${pL}`, po=expandParts.has(pk);
+            return`<div class="config-partido">
+              <div class="config-partido-hdr" onclick="togPart('${pk}')">
+                <span class="config-partido-name">${pL}</span>
+                <span class="config-partido-n">${locs.length}</span>
+                <span class="zona-arrow">${po?'▲':'▼'}</span>
+              </div>
+              ${po?`<div class="config-partido-locs">
+                ${locs.map(z=>`<div class="config-loc-row">
+                  <span>${z.localidad}</span>
+                  <button class="icon-btn" onclick="editLoc(${zones.indexOf(z)})">✏️</button>
+                </div>`).join('')}
+              </div>`:''}
+            </div>`;
+          }).join('')}
+        </div>`:''}
+      </div>`;
+    }).join('')}
+    </div><div style="height:16px"></div>`;
+}
+window.togZona = z=>{expandZonas.has(z)?expandZonas.delete(z):expandZonas.add(z);renderConfig();};
+window.togPart = k=>{expandParts.has(k)?expandParts.delete(k):expandParts.add(k);renderConfig();};
+
+window.editZPrice = (zL,precio)=>{
+  editZonePriceLabel=zL;
+  V('ez-zona-label').textContent=`${zL} — aplica a todas sus localidades`;
+  V('ez-zona-precio').value=precio;
+  openSheet($shZoneP);
+};
+document.getElementById('btn-save-precio-zona')?.addEventListener('click', async()=>{
+  if(!editZonePriceLabel)return;
+  const np=parseInt(V('ez-zona-precio').value)||0;
+  zones=zones.map(z=>z.zona.startsWith(editZonePriceLabel)?{...z,importe:np}:z);
+  saveZones();
+  try{await setDoc(doc(db,'meta','flexZones'),{zones});toast(`${editZonePriceLabel} actualizada ✓`);}
+  catch(e){toast('Guardado localmente ✓');}
+  closeSheet($shZoneP); renderConfig();
+});
+
+window.editLoc = idx=>{
+  editZoneIdx=idx; const z=zones[idx];
+  V('ez-localidad').value=z.localidad; V('ez-importe').value=z.importe; V('ez-zona').value=z.zona;
+  openSheet($shZone);
+};
+document.getElementById('btn-save-zone').addEventListener('click', async()=>{
+  if(editZoneIdx===null)return;
+  zones[editZoneIdx]={localidad:V('ez-localidad').value.trim(),zona:V('ez-zona').value.trim(),importe:parseInt(V('ez-importe').value)||0};
+  saveZones();
+  try{await setDoc(doc(db,'meta','flexZones'),{zones});}catch(e){}
+  closeSheet($shZone); renderConfig();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHEETS
+// ─────────────────────────────────────────────────────────────────────────────
+function openSheet(sh){$overlay.classList.add('open');sh.classList.add('open');}
+function closeSheet(sh){
+  sh.classList.remove('open');
+  if(!document.querySelectorAll('.sheet.open').length)$overlay.classList.remove('open');
+}
+$overlay.addEventListener('click',()=>{
+  document.querySelectorAll('.sheet.open').forEach(s=>s.classList.remove('open'));
+  $overlay.classList.remove('open');
+});
+document.querySelectorAll('[data-close-sheet]').forEach(b=>
+  b.addEventListener('click',()=>{const s=b.closest('.sheet');if(s)closeSheet(s);})
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TOAST
+// ─────────────────────────────────────────────────────────────────────────────
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+function V(id){return document.getElementById(id);}
+function fmt(n){return Math.round(n||0).toLocaleString('es-AR');}
+function fmtDec(n){return(n||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function parseNum(s){return parseFloat(String(s).replace(/\./g,'').replace(',','.'))||0;}
