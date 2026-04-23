@@ -25,8 +25,6 @@ const COSTO_COMUN  = 21900;
 const COSTO_ESP    = 22400;
 const TALLES_ESP   = [43,44,45];
 
-const LS_PIN    = 'fs_pin_v1';
-const LS_AUTH   = 'fs_auth_ok';
 const LS_ORDERS = 'fs_orders_v4';
 const LS_STOCK  = 'fs_stock_v2';
 const LS_ZONES  = 'fs_zones_v1';
@@ -63,15 +61,9 @@ let editZoneIdx  = null;
 let deliveryId   = null;
 let deliveryAction = 'edit'; // 'edit' | 'dispatch'
 
-// pin state
-let pinBuffer = '';
-let pinMode   = 'check'; // 'check' | 'setup' | 'confirm'
-let pinFirst  = '';
-
 // ─────────────────────────────────────────────────────────────────────────────
 // DOM
 // ─────────────────────────────────────────────────────────────────────────────
-const $pin     = document.getElementById('pin-screen');
 const $app     = document.getElementById('app');
 const $offline = document.getElementById('offline-pill');
 const $alert   = document.getElementById('alert-banner');
@@ -89,127 +81,20 @@ const VIEWS = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ARRANQUE — PIN primero, luego app
+// ARRANQUE — app directa, sin login ni PIN
 // ─────────────────────────────────────────────────────────────────────────────
-const yaLogueado = !!localStorage.getItem(LS_AUTH);
+$app.style.display = 'flex';
+loadCache();
+renderAll();
+initUI();
 
-if (yaLogueado) {
-  // Sesión activa → app directamente, PIN no requerido
-  $pin.style.display = 'none';
-  $app.style.display = 'flex';
-  loadCache();
-  renderAll();
-  initUI();
-} else {
-  // Mostrar pantalla PIN (setup o verificación)
-  const hasPin = !!localStorage.getItem(LS_PIN);
-  pinMode = hasPin ? 'check' : 'setup';
-  updatePinUI();
-}
+let fsConectado = false;
 
-// Auth anónima Firebase en background (no bloquea la app)
+// Auth anónima Firebase en background para Firestore
 signInAnonymously(auth).catch(() => {});
 onAuthStateChanged(auth, user => {
   if (user && !fsConectado) connectFirestore();
 });
-
-let fsConectado = false;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SISTEMA PIN
-// ─────────────────────────────────────────────────────────────────────────────
-function updatePinUI() {
-  const hints = {
-    check:   'Ingresá tu PIN',
-    setup:   'Configurá tu PIN de 4 dígitos',
-    confirm: 'Repetí el PIN para confirmar',
-  };
-  const subs = {
-    check:   'Panel de ventas',
-    setup:   'Primera vez — creá tu PIN',
-    confirm: 'Confirmá el PIN',
-  };
-  const hintEl = document.getElementById('pin-hint');
-  const subEl  = document.getElementById('pin-mode-label');
-  if (hintEl) hintEl.textContent = hints[pinMode];
-  if (subEl)  subEl.textContent  = subs[pinMode];
-  pinBuffer = '';
-  updatePinDots();
-}
-
-function updatePinDots() {
-  for (let i = 0; i < 4; i++) {
-    const d = document.getElementById(`pd-${i}`);
-    if (d) d.classList.toggle('filled', i < pinBuffer.length);
-  }
-}
-
-function handlePinKey(val) {
-  if (pinBuffer.length >= 4) return;
-  pinBuffer += val;
-  updatePinDots();
-  if (pinBuffer.length === 4) setTimeout(processPinEntry, 200);
-}
-
-function handlePinDel() {
-  if (!pinBuffer.length) return;
-  pinBuffer = pinBuffer.slice(0, -1);
-  updatePinDots();
-}
-
-function processPinEntry() {
-  if (pinMode === 'setup') {
-    pinFirst  = pinBuffer;
-    pinBuffer = '';
-    pinMode   = 'confirm';
-    updatePinUI();
-    return;
-  }
-  if (pinMode === 'confirm') {
-    if (pinBuffer === pinFirst) {
-      localStorage.setItem(LS_PIN, pinBuffer);
-      localStorage.setItem(LS_AUTH, '1');
-      enterApp();
-    } else {
-      shakePinDots();
-      const h = document.getElementById('pin-hint');
-      if (h) h.textContent = 'Los PINs no coinciden, empezá de nuevo';
-      pinFirst = ''; pinBuffer = ''; pinMode = 'setup';
-      setTimeout(updatePinDots, 400);
-    }
-    return;
-  }
-  // mode === 'check'
-  if (pinBuffer === localStorage.getItem(LS_PIN)) {
-    localStorage.setItem(LS_AUTH, '1');
-    enterApp();
-  } else {
-    shakePinDots();
-    const h = document.getElementById('pin-hint');
-    if (h) h.textContent = 'PIN incorrecto — intentá de nuevo';
-    pinBuffer = '';
-    setTimeout(updatePinDots, 400);
-  }
-}
-
-function shakePinDots() {
-  const dots = document.getElementById('pin-dots');
-  if (!dots) return;
-  dots.classList.add('shake');
-  setTimeout(() => dots.classList.remove('shake'), 500);
-}
-
-function enterApp() {
-  $pin.style.display = 'none';
-  $app.style.display = 'flex';
-  if (!uiOk) { loadCache(); renderAll(); initUI(); }
-}
-
-// Listeners del teclado PIN
-document.querySelectorAll('.pin-key[data-v]').forEach(btn => {
-  btn.addEventListener('click', () => handlePinKey(btn.dataset.v));
-});
-document.getElementById('pin-del')?.addEventListener('click', handlePinDel);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CACHE

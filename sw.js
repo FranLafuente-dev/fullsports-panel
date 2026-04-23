@@ -1,5 +1,5 @@
-// FullSports Service Worker v9 — dark theme + PIN auth
-const CACHE = 'fs-v9';
+// FullSports Service Worker v10 — sin PIN, app directa
+const CACHE = 'fs-v10';
 const SHELL = [
   './',
   './index.html',
