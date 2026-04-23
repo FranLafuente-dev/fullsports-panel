@@ -1,5 +1,7 @@
-// FullSports Service Worker v10 — sin PIN, app directa
-const CACHE = 'fs-v10';
+// FullSports Service Worker v11 — Firebase CDN cacheado, offline completo
+const CACHE = 'fs-v11';
+const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
+
 const SHELL = [
   './',
   './index.html',
@@ -10,6 +12,9 @@ const SHELL = [
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  FB + 'firebase-app.js',
+  FB + 'firebase-auth.js',
+  FB + 'firebase-firestore.js',
 ];
 
 self.addEventListener('install', e => {
@@ -30,13 +35,11 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = e.request.url;
+  // Excluir APIs de Firestore/Auth (streaming, no cacheables)
   if (
     url.includes('googleapis.com') ||
-    url.includes('firebase') ||
-    url.includes('gstatic.com') ||
-    url.includes('google.com') ||
-    url.includes('accounts.google') ||
-    url.includes('firestore.googleapis')
+    url.includes('google.com/identitytoolkit') ||
+    url.includes('accounts.google')
   ) return;
 
   if (e.request.method !== 'GET') return;
